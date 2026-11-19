@@ -9,6 +9,7 @@ enum { W_NONE,W_FORESIGHT,W_THRUST,W_RISE,W_AIR,W_DOWN,W_LAND,W_SHEATHE,W_SMALL,
        W_CHIJIN,W_CHARGE,W_SLIDE,W_RELEASE,W_FOCUS };
 enum { W_CRIMSON_MOVING=901,W_CRIMSON_STATIONARY=920,W_CRIMSON_RETREAT=921 };
 enum { W_SPIRIT_TWO_FORWARD=922,W_SPIRIT_TWO_LEFT,W_SPIRIT_TWO_RIGHT,W_SPIRIT_TWO_BACK };
+enum { W_FOCUS_FLURRY=926,W_FOCUS_LEFT,W_FOCUS_RIGHT,W_FOCUS_BACK,W_CRIMSON_SPIN };
 enum { W_CRIMSON_DIRECTIONAL=1,W_CRIMSON_LATERAL };
 enum { W_KEEP,W_ENTER,W_NATIVE,W_IDLE,W_ROLL,W_ABORT,W_NATIVE_R,W_MOTION };
 enum { W_RED_ROUND=1,W_RED_IAI=2 };
@@ -22,7 +23,7 @@ typedef struct {
     unsigned state,drawn,alive,grounded,rank,contact,counter,resources_ready;
     unsigned previous_weapon_action;
     unsigned focus_strike,valor,valor_move;
-    unsigned crimson_yaw,has_crimson_yaw;
+    unsigned focus_camera_heading,has_focus_heading;
 } WObservation;
 typedef struct {
     unsigned kind,move,source,slot,native_action,heading;
@@ -50,7 +51,7 @@ typedef struct {
     unsigned crimson_buffer_heading,crimson_buffer_direction,crimson_buffer_source;
     float wilds_gauge_fraction;
     unsigned wilds_roll_mod,wilds_roll_heading,wilds_r_pending;
-    unsigned wilds_r_direction,wilds_iai_recovered,wilds_focus_break,iai_focus_locked;
+    unsigned wilds_r_direction,wilds_iai_recovered,wilds_focus_break,focus_finisher,iai_focus_locked;
     unsigned iai_follow_keys;
     float iai_follow_wait;
     float wilds_r_wait;

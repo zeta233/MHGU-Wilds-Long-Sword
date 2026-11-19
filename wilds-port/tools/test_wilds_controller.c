@@ -26,18 +26,21 @@ int main(void){
  assert(w_wilds_enter(&s,&o,W_CHIJIN).source==W_CRIMSON_STATIONARY);
  for(unsigned direction=1;direction<=3;++direction){
   o=obs();w_reset(&s);o.base.magnitude=100;
-  o.has_crimson_yaw=1;o.crimson_yaw=1000;
-  o.base.input_heading=(o.crimson_yaw+16384*direction)&65535u;
+  o.has_focus_heading=1;o.focus_camera_heading=1000;
+  o.base.input_heading=(o.focus_camera_heading+16384*direction)&65535u;
   o.base.heading=o.base.input_heading; /* Already moving before X. */
   d=w_wilds_enter(&s,&o,W_CHIJIN);
   assert(d.source==(direction==2?W_CRIMSON_RETREAT:W_CRIMSON_MOVING));
-  assert(d.heading==(direction==2?o.crimson_yaw:o.base.input_heading));
+  assert(d.heading==(direction==2?o.focus_camera_heading:o.base.input_heading));
   assert(d.crimson_direction==(direction==2?W_CRIMSON_DIRECTIONAL:W_CRIMSON_LATERAL));
+  o.has_focus_heading=0;o.base.heading=1000;w_reset(&s);
+  d=w_wilds_enter(&s,&o,W_CHIJIN);
+  assert(d.source==W_CRIMSON_MOVING&&d.heading==o.base.input_heading);
  }
  const unsigned headings[]={0,0,16384,49152,32768};
  const unsigned sources[]={0,903,911,910,912};
  for(unsigned direction=0;direction<5;direction++){
-  o=obs();w_reset(&s);o.base.gauge=0;w_wilds_enter(&s,&o,W_CHIJIN);
+  o=obs();w_reset(&s);o.has_focus_heading=1;o.base.gauge=0;w_wilds_enter(&s,&o,W_CHIJIN);
   o.base.magnitude=direction?100:0;o.base.input_heading=headings[direction];
   assert(tick(&s,&o,ML_R,38).kind==W_KEEP);
   o.base.magnitude=0;o.base.input_heading=0;o.base.simulation_delta=7;
@@ -56,15 +59,15 @@ int main(void){
  o=obs();w_reset(&s);w_wilds_enter(&s,&o,W_SLIDE);
  tick(&s,&o,ML_R,60);o.base.simulation_delta=7;d=tick(&s,&o,ML_R,67);
  assert(d.kind==W_NATIVE&&d.native_action==23);
- for(unsigned direction=0;direction<4;++direction){
+ for(unsigned focus=0;focus<=1;++focus)for(unsigned direction=0;direction<4;++direction){
   static const unsigned inputs[]={0,16384,49152,32768};
   o=obs();w_reset(&s);o.rank=2;
   w_wilds_enter(&s,&o,W_SLIDE);
-  o.base.magnitude=100;o.base.input_heading=inputs[direction];
+  o.base.magnitude=100;o.base.input_heading=inputs[direction];o.has_focus_heading=focus;
   assert(tick(&s,&o,ML_R,53).kind==W_KEEP);
   o.base.simulation_delta=7;o.base.magnitude=0;
   d=tick(&s,&o,0,59);
-  assert(d.kind==W_MOTION&&d.source==W_SPIRIT_TWO_FORWARD+direction&&d.gauge_delta==-15);
+  assert(d.kind==W_MOTION&&d.source==W_SPIRIT_TWO_FORWARD+(focus?direction:0)&&d.gauge_delta==-15);
   assert(tick(&s,&o,ML_R,76).kind==W_KEEP);
   d=tick(&s,&o,0,81);
   assert(d.kind==W_NATIVE&&d.native_action==26);
@@ -106,9 +109,9 @@ int main(void){
  assert(wilds_bridge(&s,&o,1).move==W_SHEATHE);
  o=obs();w_reset(&s);o.base.magnitude=100;o.base.input_heading=16384;o.base.held=ML_R;
  for(int i=0;i<8;i++){o.base.sample_sequence++;d=wilds_bridge(&s,&o,1);if(d.kind!=W_KEEP)break;}
- assert(d.move==W_SLIDE&&d.source==911);
+ assert(d.move==W_SLIDE&&d.source==903&&d.heading==16384);
  for(int i=0;i<40;i++)d=tick(&s,&o,ML_R,30);
- d=tick(&s,&o,ML_R,50);assert(d.move==W_CHARGE&&s.wilds_stage==2);
+ d=tick(&s,&o,ML_R,53);assert(d.move==W_CHARGE&&s.wilds_stage==2);
  o=obs();w_reset(&s);s.move=W_LAND;s.wilds_helm_red=1;s.rank=2;o.rank=2;
  o.base.magnitude=100;o.base.input_heading=16384;o.base.heading=1234;
  d=w_wilds_enter(&s,&o,W_RELEASE);assert(d.heading==1234);
@@ -217,13 +220,20 @@ int main(void){
  o=obs();o.rank=2;w_reset(&s);s.actor=1;s.epoch=1;
  d=w_wilds_enter(&s,&o,W_FOCUS);
  o.base.native_action=w_action(W_FOCUS);o.base.motion=0x500+d.slot;
- o.base.animation_frame=68;o.base.sample_sequence++;o.contact=1;
+ o.base.animation_frame=50;o.base.sample_sequence++;o.contact=1;
  d=w_step(&s,&o);
  assert(d.kind==W_KEEP&&!d.rank_delta&&s.hit_success);
  s.wilds_focus_break=1;o.base.sample_sequence++;
  d=w_step(&s,&o);
- assert(d.kind==W_MOTION&&d.source==913&&d.rank_delta==1);
- o.base.motion=0x500+d.slot;o.base.animation_frame=53;o.base.sample_sequence++;
+ assert(d.kind==W_MOTION&&d.source==W_FOCUS_FLURRY&&d.rank_delta==1);
+ o.base.motion=0x500+d.slot;o.base.animation_frame=124;o.base.sample_sequence++;
+ assert(w_step(&s,&o).kind==W_KEEP);
+ o.base.animation_frame=125;o.base.sample_sequence++;
+ d=w_step(&s,&o);
+ assert(d.kind==W_MOTION&&d.source==913&&!d.rank_delta);
+ o.base.motion=0x500+d.slot;o.base.animation_frame=83;o.base.sample_sequence++;
+ assert(w_step(&s,&o).kind==W_KEEP);
+ o.base.animation_frame=84;o.base.sample_sequence++;
  d=w_step(&s,&o);
  assert(d.kind==W_MOTION&&d.source==914&&!d.rank_delta);
  puts("PASS: chains, holds, chords, sheath recovery, Iai, red draw, five Spirit I branches, red Foresight");

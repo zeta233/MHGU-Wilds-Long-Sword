@@ -22,7 +22,7 @@ static void world_sfx_oriented(void *a,const float *point,unsigned uid,const flo
     for(unsigned k=0;k<3;++k)set_real(request,32+4*k,point[k]);put(request,44,0);
     unsigned counter_line=(uid>=0x3f6b&&uid<=0x3f7b)||(uid>=0x3f90&&uid<=0x3fb3)||uid==0x3fc3||uid==0x3fc4;
     unsigned upright=uid==0x3f81||uid==0x3f82||uid==0x3f84;
-    unsigned line=uid==0x3f64||counter_line||blade||upright;
+    unsigned line=(uid>=0x3fd3&&uid<=0x3fd5)||uid==0x3f64||counter_line||blade||upright;
     if(line){
         put(request,20,word(request,20)|2);
         unsigned yaw=counter_line?((world.heading+6007u)&65535u):u16(a,HEADING);
@@ -49,9 +49,57 @@ static void world_sfx_oriented(void *a,const float *point,unsigned uid,const flo
 static void world_sfx_emit(void *a,const float *p,unsigned uid){world_sfx_oriented(a,p,uid,0);}
 /* Update the private blade stroke after GU evaluates its native particle. */
 static void *world_white_resource,*world_counter_core[3];
+static void *crimson_ribbons[3],*release_cuts[3];
+typedef struct { float frame,base[3],tip[3]; } WBladeEdge;
+static WBladeEdge crimson_edges[24];
+static unsigned crimson_generation,crimson_cursor,crimson_count;
+static void crimson_record_edge(void *a,float frame)
+{
+    void *weapon=(void *)(uptr)word(a,0x23a0);
+    if(!weapon||word(weapon,0x30)!=(u32)(uptr)a)return;
+    if(crimson_generation!=bind_generation){
+        crimson_generation=bind_generation;crimson_count=crimson_cursor=0;
+    }
+    if(crimson_count&&crimson_edges[crimson_cursor].frame==frame)return;
+    crimson_cursor=(crimson_cursor+1)%24;
+    if(crimson_count<24)++crimson_count;
+    WBladeEdge *edge=crimson_edges+crimson_cursor;
+    const float *m=world_bone(weapon,0);
+    if(!m)m=(const float *)((uptr)weapon+0xb0);
+    edge->frame=frame;
+    for(unsigned k=0;k<3;++k){
+        edge->base[k]=m[12+k]+m[8+k]*58;
+        edge->tip[k]=m[12+k]+m[8+k]*205;
+    }
+}
+static const WBladeEdge *crimson_edge(float age)
+{
+    unsigned cursor=crimson_cursor;
+    float at=crimson_edges[cursor].frame-age;
+    for(unsigned i=1;i<crimson_count&&crimson_edges[cursor].frame>at;++i)
+        cursor=(cursor+23)%24;
+    return crimson_edges+cursor;
+}
 static float world_white_anchor[3];
-static void world_white_stroke(void *a){
-    for(unsigned k=0;k<3;++k)world_white_anchor[k]=real(a,0x40+4*k);
+static unsigned world_white_generation;
+static void world_white_stroke(void *a,unsigned strike){
+    /* All ribbons from a multi-hit clip share one emission origin. */
+    if(world_white_generation!=bind_generation||!(world_sfx_seen&(1u<<19))){
+        for(unsigned k=0;k<3;++k)world_white_anchor[k]=real(a,0x40+4*k);
+        world_white_generation=bind_generation;world_sfx_seen|=1u<<19;
+    }
+    if(world.move==W_CHIJIN){
+        for(unsigned uid=0x3fd0;uid<=0x3fd2;++uid)world_sfx_emit(a,world_white_anchor,uid);
+        /* The same GU emitter used by the Spirit ground combo, placed on
+         * the blade at the start of the damaging sweep (also on a whiff). */
+        void *weapon=(void *)(uptr)word(a,0x23a0);
+        const float *blade=weapon&&word(weapon,0x30)==(u32)(uptr)a?world_bone(weapon,0):0;
+        if(blade&&strike){
+            float point[3];
+            for(unsigned k=0;k<3;++k)point[k]=blade[12+k]+blade[8+k]*70;
+            world_sfx_emit(a,point,0x3f61);
+        }
+    }
     world_sfx_emit(a,world_white_anchor,0x3f85);
 }
 #include "world_thrust_foresight_fx.inc"
@@ -78,11 +126,34 @@ static int world_poly_update(void *g)
         }
         return live;
     }
+    /* Fixed at the actual contact, including shells that land after the
+     * player has already left the release animation. */
+    for(unsigned cut=0;cut<3;++cut)if(res==(u32)(uptr)release_cuts[cut]){
+        for(void *p=particle;p;p=(void *)(uptr)word(p,4)){
+            if(byte(p,125)!=2)continue;
+            float *buf=(float *)((uptr)p+u16(g,212));
+            float age=(float)word(p,20);
+            float fade=age<12?1.f-age/14.f:.12f;
+            float length=cut==2?132.f:83.f,width=(cut==2?9.f:6.f)*fade;
+            float tilt=cut==1?-.55f:cut==2?.20f:.80f;
+            for(unsigned j=0;j<4;++j){
+                float along=(j&1?length:-length),across=(j<2?width:-width);
+                buf[j*4]=along-across*tilt;buf[j*4+1]=along*tilt+across;buf[j*4+2]=0;
+            }
+        }
+        return live;
+    }
     if(!world_bound)return live;
     world_particle_motion(g,(void *)(uptr)res);
     world_tf_follow(g,(void *)(uptr)res);
     unsigned white=res==(u32)(uptr)world_white_resource&&(world.move==W_SMALL||world.move==W_FORESIGHT||world.move==W_THRUST||world.move==W_DOWN||world.move==W_RISE);
-    if(!white)return live;
+#if ML_WILDS_MOVES
+    white|=res==(u32)(uptr)world_white_resource&&wilds_clip(world.source)!=0;
+#endif
+    unsigned segment=0;
+    while(segment<3&&res!=(u32)(uptr)crimson_ribbons[segment])++segment;
+    unsigned crimson=segment<3&&world.move==W_CHIJIN&&crimson_count&&crimson_generation==bind_generation;
+    if(!white&&!crimson)return live;
     if(!(world_sfx_seen&1024)){world_sfx_seen|=1024;log_event("world_blade_layout",(u32)(uptr)g,word(particle,124),u16(g,212),word(g,52));}
     if(byte(particle,125)!=2)return live;
     void *a=(void *)(uptr)world_bound_actor;
@@ -90,9 +161,20 @@ static int world_poly_update(void *g)
     void *w=(void *)(uptr)word(a,0x23a0);
     if(!w||word(w,0x30)!=(u32)(uptr)a)return live;
     const float *m=(const float *)((uptr)w+0xb0);
-    float *buf=(float *)((uptr)particle+u16(g,212));
-    for(unsigned ix=0;ix<4;++ix)for(unsigned k=0;k<3;++k)
-        buf[ix*4+k]=m[12+k]-world_white_anchor[k]+m[8+k]*(ix&1?225.f:35.f)+m[k];
+    /* The old strip put vertices 0/2 and 1/3 at identical coordinates,
+     * giving both triangles zero area even when the particle was live. */
+    for(void *p=particle;p;p=(void *)(uptr)word(p,4)){
+        if(byte(p,125)!=2)continue;
+        float *buf=(float *)((uptr)p+u16(g,212));
+        for(unsigned ix=0;ix<4;++ix){
+            if(crimson){
+                const WBladeEdge *edge=crimson_edge((segment+(ix>=2))*2.5f);
+                const float *end=(ix&1)?edge->tip:edge->base;
+                for(unsigned k=0;k<3;++k)buf[ix*4+k]=end[k]-world_white_anchor[k];
+            }else for(unsigned k=0;k<3;++k)
+                buf[ix*4+k]=m[12+k]-world_white_anchor[k]+m[8+k]*(ix&1?225.f:35.f)+m[k]*(ix<2?4.f:-4.f);
+        }
+    }
     if(!(world_sfx_seen&512)){world_sfx_seen|=512;log_event("world_blade_live",(u32)(uptr)a,(u32)(uptr)g,(u32)(uptr)particle,(u32)real(a,FRAME));}
     return live;
 }
@@ -128,6 +210,12 @@ static void world_fx_tick(void *a)
             if(world_resource_path((char *)objects[i]+8,"effect/world/tf_3d04"))world_foresight_resources[0]=objects[i];
             if(world_resource_path((char *)objects[i]+8,"effect/world/tf_3d05"))world_foresight_resources[1]=objects[i];
             if(world_resource_path((char *)objects[i]+8,"effect/world/tf_3d06"))world_foresight_resources[2]=objects[i];
+            static const char *const ribbons[]={"effect/world/crimson_ribbon","effect/world/crimson_mid","effect/world/crimson_tail"};
+            static const char *const cuts[]={"effect/world/release_cut_up","effect/world/release_cut_down","effect/world/release_cut_end"};
+            for(unsigned j=0;j<3;++j){
+                if(world_resource_path((char *)objects[i]+8,ribbons[j]))crimson_ribbons[j]=objects[i];
+                if(world_resource_path((char *)objects[i]+8,cuts[j]))release_cuts[j]=objects[i];
+            }
             if(world_resource_path((char *)objects[i]+8,"effect/world/iai_line_blade_white"))world_white_resource=objects[i];
             if(*(uptr *)objects[i]==main_base+0x175261c&&world_resource_path((char *)objects[i]+8,"effect/pel/pl/world_simple"))pel=objects[i];
         }
@@ -142,6 +230,18 @@ static void world_fx_tick(void *a)
     if((world.move==W_GROUND && world.source!=363)||!world_bound||world.actor!=(u32)(uptr)a||world.epoch!=byte(a,AREA)||!world.move||
        (int16_t)u16(a,HP)<=0||u16(a,STATE)!=16||u16(a,MOTION)!=0x500+world.slot)return;
     float frame=real(a,FRAME),point[3];
+    if(world.move==W_CHIJIN){
+        crimson_record_edge(a,frame);
+        /* Start the trail during the approach, ahead of each collision. */
+        unsigned lead=world.source==907?5:4;
+        for(unsigned i=0;i<sizeof(wilds_strikes)/sizeof(*wilds_strikes);++i){
+            const WildsStrike *stroke=wilds_strikes+i;
+            if(stroke->source!=world.source)continue;
+            if(frame+lead>=stroke->begin&&frame<stroke->begin&&world_sfx_hit!=(int)i){
+                world_sfx_hit=(int)i;world_white_stroke(a,0);
+            }
+        }
+    }
     /* Whiffs still draw the stroke at the source landing/cost delay. */
     if((world.move==W_DOWN||world.move==W_LAND)&&!world_helm_line_hit&&world_helm_tier&&
        ((world_helm_emitted&1u)||(!world_helm_count&&world.move==W_LAND&&world_elapsed-world_helm_landed>=.5f))){
@@ -168,7 +268,7 @@ static void world_fx_tick(void *a)
     else {for(unsigned k=0;k<3;++k)point[k]=real(a,0x40+4*k);point[1]+=80;}
     if(world.move==W_GROUND&&world.ground_node==1&&!world.spirit_paid)return;
     if(world.move==W_SMALL||world.move==W_FORESIGHT){
-        world_white_stroke(a);return;
+        world_white_stroke(a,0);return;
     }
     if(world.move==W_GROUND)world_sfx_emit(a,point,0x3f61);
 }

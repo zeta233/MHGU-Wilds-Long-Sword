@@ -9,7 +9,7 @@ static unsigned world_air_owned,world_air_actor,world_air_epoch,world_down_appli
 static unsigned world_floor_depth,world_saved_mode,world_saved_tag;
 static float world_saved_gravity;
 static float world_rise_dx,world_rise_dz,world_rise_hold;
-static unsigned world_air_sample;
+static unsigned world_air_sample,world_air_steering;
 static unsigned world_air_owner(void *a)
 {
     return world_air_owned&&world_air_actor==(u32)(uptr)a&&world_air_epoch==byte(a,AREA);
@@ -35,9 +35,9 @@ static void world_physics_end(void *a)
         if(!airborne)world_zero_velocity(a);
         set_real(a,0x1024,airborne&&world_saved_gravity>=0?-.2272727f:world_saved_gravity);
     }
-    world_air_owned=world_down_applied=0;
+    world_air_owned=world_down_applied=world_air_steering=0;
 }
-static void world_physics_begin(void *a,unsigned move,unsigned magnitude)
+static void world_physics_begin(void *a,unsigned move)
 {
     if(move<W_RISE||move>W_DOWN){world_physics_end(a);return;}
     if(!world_air_owner(a)){
@@ -56,9 +56,8 @@ static void world_physics_begin(void *a,unsigned move,unsigned magnitude)
     }else if(move==W_AIR){
         set_real(a,0x1014,1050.0f*1.3f/60.0f);
         set_real(a,0x1024,-1250.0f*1.3f*1.3f/3600.0f);
-        float forward=magnitude>=50?200.0f*1.3f/60.0f:0;
-        set_real(a,0x1010,world_sin(world.heading)*forward);
-        set_real(a,0x1018,world_sin(world.heading+16384u)*forward);
+        put(a,0x1010,0);put(a,0x1018,0);
+        world_air_steering=1;world_air_sample=sample_sequence-1;
         world_down_applied=0;
     }
 }
@@ -75,6 +74,23 @@ static void world_physics_tick(void *a)
         }
         float speed=world_rise_hold>0.00001f?.02f:1;
         set_real(a,0x50c,speed);set_real(a,0x14b0,speed);
+    }
+    if(world_air_steering&&world_air_sample!=sample_sequence){
+        world_air_sample=sample_sequence;
+        if(real(a,0x1014)<=0||(world.move==W_DOWN&&real(a,FRAME)>=30)){
+            put(a,0x1010,0);put(a,0x1018,0);
+            world_air_steering=0;
+        }else{
+            MLObservation stick=observe(a,1);
+            float speed=stick.magnitude>=50?1.8f*stick.magnitude/128.f:0;
+            float blend=real(a,0x1c)*.3f;
+            if(blend>1)blend=1;
+            if(blend>0){
+                float x=real(a,0x1010),z=real(a,0x1018);
+                set_real(a,0x1010,x+(speed*world_sin(stick.input_heading)-x)*blend);
+                set_real(a,0x1018,z+(speed*world_sin(stick.input_heading+16384)-z)*blend);
+            }
+        }
     }
     if(world.move!=W_DOWN||real(a,FRAME)<30)return;
     unsigned initial=!world_down_applied;

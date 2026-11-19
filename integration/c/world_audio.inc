@@ -69,10 +69,42 @@ static u32 world_audio_position(void *voice)
     }
     return world_audio_original_position(voice);
 }
+#if ML_WILDS_MOVES && ML_WORLD_PRESENTATION
+#include "gu_round_banks.h"
+static void **gu_round_resources;
+static void *(*gu_original_sound_bank)(void *,unsigned);
+static void *gu_round_sound_bank(void *emitter,unsigned group)
+{
+    void *original=gu_original_sound_bank(emitter,group);
+    if(!original||!gu_round_resources||(group!=2&&group!=4))return original;
+    void *a=(void *)(uptr)world_audio_live_actor;
+    if(!a||(uptr)emitter!=(uptr)a+0x111c||world_contact_audio_scope==2)return original;
+    unsigned motion=u16(a,MOTION);
+    if(!world_contact_audio_scope&&motion!=0x500+127&&motion!=0x500+148&&motion!=0x500+219)return original;
+    static const char prefix[]="sound\\se\\pl\\wp\\swo\\";
+    const char *path=(const char *)original+8;
+    for(unsigned k=0;k<sizeof(prefix)-1;++k)if(path[k]!=prefix[k])return original;
+    unsigned id=255;
+    if(group==2){
+        const char *p=path+sizeof(prefix)-1;
+        if(p[0]<'0'||p[0]>'9'||p[1]<'0'||p[1]>'9'||p[2]<'0'||p[2]>'9')return original;
+        id=(p[0]-'0')*100+(p[1]-'0')*10+p[2]-'0';
+        if(id>=255)return original;
+    }
+    unsigned i=gu_round_request_index[id];
+    return i?gu_round_resources[i]:original;
+}
+#endif
 static unsigned world_audio_install(void)
 {
     if(*(u32 *)(main_base+0xbe28c4)!=0xe92d4ff0u||*(u32 *)(main_base+0xbe28c8)!=0xe28db01cu)return 0;
     forge_hook_create((void *)(main_base+0xbe28c4),(void *)world_audio_position,(void **)&world_audio_original_position);
+#if ML_WILDS_MOVES && ML_WORLD_PRESENTATION
+    const u32 *resolve=(const u32 *)(main_base+0x4d5e14);
+    if(resolve[0]!=0xe1a02000u||resolve[1]!=0xe3a00000u)return 0;
+    forge_hook_create((void *)resolve,(void *)gu_round_sound_bank,(void **)&gu_original_sound_bank);
+    if(!gu_original_sound_bank)return 0;
+#endif
     return world_audio_original_position!=0;
 }
 #endif
@@ -147,6 +179,7 @@ static unsigned world_audio_impact(unsigned id,enum WAudioImpact impact,const fl
     case W_SOUND_RELEASE_FOLLOW: requests=wilds_release_impact_requests;event="wilds_release_impact_audio";break;
     case W_SOUND_HELM_FOLLOW: requests=wilds_helm_impact_requests;event="wilds_helm_impact_audio";break;
     case W_SOUND_IAI_FOLLOW: requests=wilds_iai_impact_requests;event="wilds_iai_impact_audio";break;
+    case W_SOUND_CRIMSON_FINISH: event="wilds_crimson_finish_audio";break;
     case W_SOUND_BLADE: break;
     }
     static unsigned last_blade,last_follow;
@@ -156,7 +189,11 @@ static unsigned world_audio_impact(unsigned id,enum WAudioImpact impact,const fl
     *last=choice+1;
     unsigned request=requests[choice];
     world_audio_play(a,request,point);
-    log_event(event,world.actor,id,request,world.source);
+    if(impact==W_SOUND_CRIMSON_FINISH){
+        const unsigned *accent=world.source==907?wilds_release_impact_requests:wilds_iai_impact_requests;
+        world_audio_play(a,accent[choice],point);
+        log_event(event,world.actor,id,accent[choice],world.source);
+    }else log_event(event,world.actor,id,request,world.source);
     return 1;
 }
 #endif
@@ -195,9 +232,6 @@ static void world_audio_weapon(void *a,unsigned source_request)
     unsigned request;
     switch(source_request){
     case 5620: case 5621: case 5625:
-        /* The red Roundslash has one cut. The World donor's later
-         * recovery swing is outside the Wilds attack track. */
-        if(source_request==5620&&world.source==109&&world.red_foresight_chain)return;
         if(world.move==W_BIG||(world.move>=W_RISE&&world.move<=W_LAND))return;
         request=wilds_swing_request((unsigned)real(a,FRAME));break;
     case 5675:
@@ -303,12 +337,9 @@ static void world_audio_blade(void *a,const float *point){(void)a;(void)point;}
 static void world_audio_tail(void *a,float d,const float *p){(void)a;(void)d;(void)p;}
 #endif
 #endif
-static void world_audio_tick(void *a)
+static void world_audio_load(void *a)
 {
-    if(world_audio_failed)return;
-#if WORLD_AUDIO_WEAPON
-    world_audio_live_actor=(u32)(uptr)a;world_audio_live_epoch=byte(a,AREA);
-#endif
+    if(world_audio_failed||world_audio_ready)return;
     if(!world_audio_archive){
         void *manager=*(void **)(main_base+0x2126a64);if(!manager)return;
         uptr *vt=*(uptr **)manager;
@@ -322,7 +353,11 @@ static void world_audio_tick(void *a)
         if(flags&0x50){world_audio_failed=1;log_event("world_audio_failed",(u32)(uptr)a,flags,0,0);return;}
         if(!(flags&1))return;
         unsigned n=word(world_audio_archive,0x68);void **objects=*(void ***)((uptr)world_audio_archive+0x64);
+#if ML_WILDS_MOVES && ML_WORLD_PRESENTATION
+        if(n!=GU_ROUND_RESOURCE_COUNT||!objects)return;
+#else
         if(n!=WILDS_AUDIO_RESOURCE_COUNT||!objects)return;
+#endif
         for(unsigned i=0;i<n;++i){
             if(!objects[i])return;
             unsigned child=byte(objects[i],0x50);
@@ -332,9 +367,21 @@ static void world_audio_tick(void *a)
                 world_audio_request=objects[i];
         }
         if(!world_audio_request)return;
+#if ML_WILDS_MOVES && ML_WORLD_PRESENTATION
+        gu_round_resources=objects;
+#endif
         world_audio_ready=1;
         log_event("world_audio_ready",(u32)(uptr)a,(u32)(uptr)world_audio_request,word(world_audio_request,0x68),0);
     }
+}
+static void world_audio_tick(void *a)
+{
+    if(world_audio_failed)return;
+#if WORLD_AUDIO_WEAPON
+    world_audio_live_actor=(u32)(uptr)a;world_audio_live_epoch=byte(a,AREA);
+#endif
+    world_audio_load(a);
+    if(!world_audio_ready)return;
     unsigned cmd=world_audio_probe_command;
 #if ML_WORLD_AUDIO_PROBE
     world_audio_probe_command=0;
@@ -359,14 +406,14 @@ static void world_audio_tick(void *a)
             }
         }
     }
-    if((world.move==W_GROUND && world.source!=363&&!(world.source==109&&world.red_foresight_chain))||!world_bound||!world.move||world_audio_actor!=(u32)(uptr)a||world_audio_epoch!=byte(a,AREA)||
+    if((world.move==W_GROUND && world.source!=363)||!world_bound||!world.move||world_audio_actor!=(u32)(uptr)a||world_audio_epoch!=byte(a,AREA)||
        (int16_t)u16(a,HP)<=0||u16(a,MOTION)!=0x500+world.slot)return;
 #if ML_WILDS_MOVES
+    if(world.source==917||world.source==109)return;
     /* Wilds motions 233, 235, 237 and 252 mapped to the GU clip phases.
      * A short vault can go directly from air to landing. Play the swing
      * at that transition if the descent clip was bypassed. */
     static const WildsAudioCue follow_cues[]={
-        {109,20,WILDS_SOUND_COUNTER},
         {172,1,WILDS_SOUND_HELM_JUMP},
         {173,0,WILDS_SOUND_HELM_CUT},
         {174,0,WILDS_SOUND_HELM_CUT},
@@ -387,7 +434,7 @@ static void world_audio_tick(void *a)
         world_audio_play(a,cue->request,0);
         log_event("wilds_audio_cue",(u32)(uptr)a,world.source,cue->request,(u32)real(a,FRAME));
     }
-    if((world.source>=901&&world.source<=918)||(world.source>=W_CRIMSON_STATIONARY&&world.source<=W_SPIRIT_TWO_BACK)){
+    if((world.source>=901&&world.source<=918)||(world.source>=W_CRIMSON_STATIONARY&&world.source<=W_CRIMSON_SPIN)){
         for(unsigned i=0;i<sizeof(wilds_audio_cues)/sizeof(*wilds_audio_cues);++i){
             const WildsAudioCue *cue=wilds_audio_cues+i;uint64_t bit=(uint64_t)1<<(i%64);
             if(cue->source!=world.source||(wilds_audio_seen[i/64]&bit))continue;

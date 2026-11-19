@@ -8,7 +8,7 @@ typedef struct {
 } WFollow;
 static WFollow world_follow[56];
 #if ML_WILDS_MOVES
-static unsigned world_release_targets[4];
+static unsigned world_release_targets[4],crimson_final_strike;
 #endif
 static unsigned world_helm_tier;
 static unsigned world_helm_count,world_helm_hit_sample;
@@ -89,7 +89,7 @@ static void (*world_original_shell_position)(void *);
 static void *world_monster(unsigned uid);
 static const float *world_bone(void *a,int bone);
 typedef struct {unsigned shell,request,helm_impact,kind;float until,point[3];
-    unsigned attached,target,uid;int bone;float local[3];} WShellPosition;
+    unsigned attached,target,uid,ordinal;int bone;float local[3];} WShellPosition;
 static WShellPosition world_shell_positions[64];
 static unsigned world_release_shell(void *attack)
 {
@@ -102,6 +102,8 @@ static unsigned world_release_shell(void *attack)
     return 0;
 }
 #if ML_WILDS_MOVES && ML_WORLD_PRESENTATION
+/* 1 forces the round bank for this contact; 2 excludes a delayed shell. */
+static unsigned world_contact_audio_scope;
 static void (*world_original_impact_sound)(void *,void *,void *,const float *);
 static void world_impact_sound(void *manager,void *target,void *attack,const float *point)
 {
@@ -110,6 +112,16 @@ static void world_impact_sound(void *manager,void *target,void *attack,const flo
     if(blade)
         log_event("wilds_blade_hitstop",world.actor,world.source,byte(attack,0x57),byte(attack,6));
     unsigned shell=blade?0:world_release_shell(attack);
+    /* Use the contact reported by GU, including delayed release hits which
+     * may land after the hunter has already started another move. */
+    if(point&&world.actor&&(shell||(blade&&wilds_clip(world.source))))
+        world_sfx_emit((void *)(uptr)world.actor,point,0x3fc0);
+    if(point&&blade&&world.source==904){
+        unsigned uid=world_hit==160?0x3fd5:world_hit==159?0x3fd4:0x3fd3;
+        world_sfx_emit((void *)(uptr)world.actor,point,uid);
+    }
+    if(point&&blade&&world.move==W_CHIJIN&&crimson_final_strike)
+        world_sfx_emit((void *)(uptr)world.actor,point,0x3f60);
     unsigned follow=0;
     if(!blade&&!shell){
         for(unsigned i=0;i<64;++i){
@@ -121,29 +133,31 @@ static void world_impact_sound(void *manager,void *target,void *attack,const flo
         }
     }
     enum WAudioImpact impact=shell?W_SOUND_RELEASE_FOLLOW:follow==1?W_SOUND_HELM_FOLLOW:
-        follow?W_SOUND_IAI_FOLLOW:world.move==W_RELEASE?W_SOUND_RELEASE_BLADE:W_SOUND_BLADE;
-    if((blade||shell||follow)&&world_audio_impact(u16(attack,0x34),impact,point)){
-        log_event("wilds_impact_sound",world.actor,shell?1040:follow?1041+follow:world.source,
-                  (u32)(uptr)target,u16(attack,0x34));
-        return;
-    }
-    unsigned sound=byte(attack,0x55);
-    if((!blade&&!shell)||sound!=0xfe){
+        follow?W_SOUND_IAI_FOLLOW:blade&&world.move==W_CHIJIN&&crimson_final_strike?
+        W_SOUND_CRIMSON_FINISH:world.move==W_RELEASE?W_SOUND_RELEASE_BLADE:W_SOUND_BLADE;
+    if(!blade&&!shell&&!follow){
         world_original_impact_sound(manager,target,attack,point);
         return;
     }
-    /* The blank HDP donor sets 0xfe, outside GU's hit sound table. Use
-     * the regular Long Sword selector for the native sound call only.
-     * Release shells also hide the stock VFX by clearing the effect ID,
-     * which the sound dispatcher checks before choosing its hit sound. */
+    /* Keep GU's contact sound dispatch alongside the Wilds layer. Delayed
+     * shells may suppress visuals, so expose the slash effect only during
+     * this synchronous sound call. */
     unsigned char *collider=(unsigned char *)attack;
-    unsigned effect=collider[0x52];
-    collider[0x55]=0;
-    if(shell&&!effect)collider[0x52]=0x2e;
+    unsigned sound=collider[0x55],effect=collider[0x52];
+    unsigned round=blade&&(world.source==109||world.source==917);
+    unsigned previous_scope=world_contact_audio_scope;
+    world_contact_audio_scope=round?1:2;
+    if(round){collider[0x55]=0;collider[0x52]=0x2e;}
+    if(sound==0xfe)collider[0x55]=0;
+    if(!effect)collider[0x52]=0x2e;
     world_original_impact_sound(manager,target,attack,point);
+    log_event("wilds_gu_contact_audio",world.actor,u16(attack,0x34),collider[0x55],collider[0x52]);
     collider[0x52]=(unsigned char)effect;
     collider[0x55]=(unsigned char)sound;
-    log_event("wilds_impact_sound",world.actor,blade?world.source:1040,(u32)(uptr)target,u16(attack,0x34));
+    world_contact_audio_scope=previous_scope;
+    if(!round)world_audio_impact(u16(attack,0x34),impact,point);
+    log_event("wilds_impact_sound",world.actor,shell?1040:follow?1041+follow:world.source,
+              (u32)(uptr)target,u16(attack,0x34));
 }
 static unsigned world_install_impact_sound(void)
 {
@@ -405,6 +419,13 @@ static u32 world_monster_query(void *manager,void *attack,void *target)
                     /* The red stroke starts at the first real damage contact. */
                     world_helm_line((void *)(uptr)world.actor,(const float *)((uptr)attack+0x20));
                 }
+            }else if(p->helm_impact==3){
+                const float *contact=(const float *)((uptr)attack+0x20);
+                if(p->ordinal==11){
+                    world_sfx_emit((void *)(uptr)world.actor,contact,0x3fd5);
+                    world_sfx_emit((void *)(uptr)world.actor,contact,0x3f60);
+                }else if(p->ordinal%3==0)
+                    world_sfx_emit((void *)(uptr)world.actor,contact,(p->ordinal&1)?0x3fd4:0x3fd3);
             }else world_helm_impact((void *)(uptr)world.actor,(const float *)((uptr)attack+0x20));
             p->helm_impact=0;
             log_event("world_helm_fx_contact",world.actor,p->shell,(u32)(uptr)target,p->request);
@@ -460,7 +481,7 @@ static unsigned world_burst(void *a,WFollow *job,const float *point)
     for(unsigned i=0;i<64;++i)if(!world_shell_positions[i].shell||world_shell_positions[i].until<world_elapsed){
         world_shell_positions[i]=(WShellPosition){.shell=(u32)(uptr)shell,.request=word(shell,0x136c),.helm_impact=job->kind==1?1:job->kind==4?3:2,.kind=job->kind,
             .until=world_elapsed+(job->kind==4?.2f:.6f),.point={point[0],point[1],point[2]},
-            .attached=job->kind==4,.target=job->target,.uid=job->uid,.bone=job->bone,
+            .attached=job->kind==4,.ordinal=job->emitted,.target=job->target,.uid=job->uid,.bone=job->bone,
             .local={job->point[0],job->point[1],job->point[2]}};break;
     }
     /* Native674404 uses byte7 as started and byte6 as burst count. 255
@@ -473,7 +494,8 @@ static unsigned world_burst(void *a,WFollow *job,const float *point)
     /* Native3798cc skips hit visuals for effect ID0. Both source Helm and
      * delayed Iai SHLPs bind EPV2006/0; Sakura45 would duplicate that flash. */
 #if ML_WORLD_PRESENTATION
-    if(job->kind!=1)*(uint16_t *)((uptr)collider+0x52)=0;
+    if(job->kind==4)*(uint16_t *)((uptr)collider+0x52)=0x2e; /* GU sword slash contact. */
+    else if(job->kind!=1)*(uint16_t *)((uptr)collider+0x52)=0;
 #endif
     /* Both source delayed shell SHLPs live for0.5s. A3-frame shortcut could
      * expire before the collision pass on a slow frame; native attack IDs

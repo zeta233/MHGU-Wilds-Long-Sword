@@ -29,10 +29,10 @@ static void wilds_spirit_direction(WState *s,const MLObservation *b)
 
 static WDecision wilds_moving_spirit_two(WState *s,const WObservation *o)
 {
-    int angle=ml_heading_delta(s->wilds_direction_input,s->wilds_direction_heading);
+    unsigned heading=directional_facing(o,s->wilds_direction_input);
+    int angle=ml_heading_delta(s->wilds_direction_input,heading);
     unsigned source=angle>24576||angle< -24576?W_SPIRIT_TWO_BACK:
         angle>=8192?W_SPIRIT_TWO_LEFT:angle<=-8192?W_SPIRIT_TWO_RIGHT:W_SPIRIT_TWO_FORWARD;
-    unsigned heading=s->wilds_direction_heading;
     WDecision d;
     if(s->move==W_SLIDE)d=wilds_phase(s,o,source);
     else{
@@ -74,7 +74,10 @@ static WDecision wilds_spirit(WState *s,const WObservation *o)
         if(d.kind!=W_KEEP)return d;
     }
     if(s->move==W_SLIDE){
-        if(wilds_spirit_is_two(s->source))return wilds_native(s,o,26);
+        if(wilds_spirit_is_two(s->source)){
+            /* Moving II occupies the same link as native action 23. */
+            return wilds_native(s,o,o->valor?136:26);
+        }
         if(s->wilds_r_direction&&spirit_available(o,15))return wilds_moving_spirit_two(s,o);
         return wilds_native(s,o,23);
     }
@@ -172,7 +175,7 @@ static WDecision wilds_red_round_step(WState *s,const WObservation *o)
     if(wilds_red_follow_r(s,b,edge,50)&&o->rank==3){
         WDecision d=enter(s,o,W_CHARGE,ML_R);
         s->red_foresight_chain=1;s->wilds_tier=4;
-        d.source=s->source=917;d.slot=s->slot=w_clip(917)->slot;
+        d.source=s->source=W_CRIMSON_SPIN;d.slot=s->slot=w_clip(W_CRIMSON_SPIN)->slot;
         return d;
     }
     if(b->animation_frame>=50&&(edge&ML_X)&&b->held==ML_X&&o->rank==3)
@@ -225,11 +228,30 @@ static WDecision wilds_step(WState *s,const WObservation *o)
     /* Match the World kernel's 0.10-second R confirmation, so a human
      * R+B chord cannot be stolen by a leading solo R request. */
     unsigned spirit_link=s->move==W_CHIJIN||s->move==W_SLIDE||s->move==W_FOCUS||s->source==902;
-    if(spirit_link&&(pressed&ML_R)&&b->held==ML_R&&frame+18>=clip->cancel){
+    /* MOT 287 plants the feet and finishes its backward cut at frame 40.
+     * Let solo R take over there. The later X chain still uses frame 90. */
+    unsigned crimson=s->move==W_CHIJIN;
+    unsigned retreat_spirit=crimson&&s->source==W_CRIMSON_RETREAT;
+    /* A solo R during a Crimson swing is one queued follow-up. Keep the
+     * stage's last attack window intact and take its normal cancel frame. */
+    if(spirit_link&&(pressed&ML_R)&&b->held==ML_R&&(crimson||frame+18>=clip->cancel)){
         s->wilds_r_pending=1;s->wilds_r_wait=.10f;
         wilds_spirit_direction(s,b);
     }
     if(b->held&(ML_Y|ML_ZR|ML_B))s->wilds_r_pending=0;
+    if(crimson&&frame<clip->cancel&&(b->held&(ML_X|ML_A)))s->wilds_r_pending=0;
+    /* Read the complete held chord when the cut permits a follow-up.
+     * Its second button may have been pressed during the swing or hitstop. */
+    if(crimson&&frame>=(retreat_spirit?40u:clip->cancel)){
+        if(b->held==(ML_R|ML_A))return enter(s,o,W_FORESIGHT,ML_R|ML_A);
+        if(!o->valor&&b->held==(ML_R|ML_B))return enter(s,o,W_SHEATHE,ML_R|ML_B);
+    }
+    if(retreat_spirit&&frame<clip->cancel){
+        if(frame>=40&&s->wilds_r_pending&&s->wilds_r_wait<=0){
+            s->wilds_r_pending=0;
+            return wilds_spirit(s,o);
+        }
+    }
     /* Buffer the final twelve recovery frames so an early evade tap is not
      * swallowed by the native request filter while our action owns the slot. */
     if((pressed&ML_B)&&!(b->held&ML_ZR)&&frame+12>=clip->cancel){
@@ -282,8 +304,17 @@ static WDecision wilds_step(WState *s,const WObservation *o)
         }
     }
     if(s->move==W_FOCUS){
-        if(s->source==905&&frame>=68&&s->wilds_focus_break)return wilds_phase(s,o,913);
-        if(s->source==913&&frame>=53)return wilds_phase(s,o,914);
+        if(s->wilds_focus_break&&(s->source==905||s->source==W_FOCUS_FLURRY||s->source==913)){
+            if(b->magnitude>=50){
+                int angle=ml_heading_delta(b->input_heading,s->heading);
+                s->focus_finisher=angle>24576||angle< -24576?W_FOCUS_BACK:
+                    angle>=8192?W_FOCUS_LEFT:angle<=-8192?W_FOCUS_RIGHT:914;
+            }
+            if(s->source==905&&frame>=50)return wilds_phase(s,o,W_FOCUS_FLURRY);
+            if(s->source==W_FOCUS_FLURRY&&frame>=125)return wilds_phase(s,o,913);
+            if(s->source==913&&frame>=84)
+                return wilds_phase(s,o,s->focus_finisher?s->focus_finisher:914);
+        }
     }
     if(frame>=clip->cancel){
         if(s->move==W_SLIDE&&b->held==ML_R&&s->wilds_elapsed>=.6f)

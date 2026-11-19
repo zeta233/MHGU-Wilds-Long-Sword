@@ -207,6 +207,22 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
     WWound *w=monster->parts+region;
     unsigned focus=world.move==W_FOCUS&&world.source==905&&world_attack_owned&&
         world_attack_actor==world.actor&&u16(attack,0x34)==world_attack_id;
+    if(focus&&!world.wilds_focus_break&&w->until<=world_elapsed){
+        /* Adjacent GU hurt parts can win the same blade contact. Resolve
+         * only a nearby, currently posed wound on the monster actually hit. */
+        float best=68.f*68.f;
+        for(unsigned i=0;i<WOUND_PARTS;++i){
+            WWound *candidate=monster->parts+i;
+            float pos[3],d2=0;
+            if(candidate->until<=world_elapsed||!world_wound_position(target,candidate,pos))continue;
+            for(unsigned k=0;k<3;++k){float d=pos[k]-real(point,4*k);d2+=d*d;}
+            if(d2<best){
+                unsigned limit=u16(status,0x3be + 12*i);
+                if(!limit||limit>20000)continue;
+                best=d2;region=i;threshold=limit;w=candidate;
+            }
+        }
+    }
     if(w->until>world_elapsed){
         if(!focus||world.wilds_focus_break)return;
         w->progress=0;w->until=0;w->recover=world_elapsed+12;w->flash=world_elapsed+.45f;

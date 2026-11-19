@@ -17,7 +17,7 @@ static const WildsClip wilds_clips[]={
  {910u,212u,148u,2278u,48u,92u},
  {911u,213u,148u,2426u,48u,92u},
  {912u,214u,164u,2574u,78u,115u},
- {913u,215u,90u,2738u,53u,70u},
+ {913u,215u,90u,2738u,84u,85u},
  {914u,216u,139u,2828u,42u,90u},
  {920u,98u,140u,2967u,44u,95u},
  {921u,99u,140u,3107u,90u,95u},
@@ -25,6 +25,11 @@ static const WildsClip wilds_clips[]={
  {923u,85u,180u,3384u,68u,106u},
  {924u,86u,173u,3564u,68u,106u},
  {925u,87u,191u,3737u,75u,112u},
+ {926u,88u,222u,3928u,125u,132u},
+ {927u,89u,170u,4150u,47u,98u},
+ {928u,90u,162u,4320u,47u,96u},
+ {929u,91u,140u,4482u,42u,90u},
+ {930u,92u,188u,4622u,65u,114u},
 };
 typedef struct {unsigned source,begin,end,row,tiered;} WildsStrike;
 static const WildsStrike wilds_strikes[]={
@@ -42,10 +47,6 @@ static const WildsStrike wilds_strikes[]={
  {917u,24u,44u,161u,0u},
  {918u,15u,35u,162u,0u},
  {918u,40u,69u,163u,0u},
- {905u,44u,62u,164u,0u},
- {913u,8u,21u,165u,0u},
- {913u,36u,49u,166u,0u},
- {914u,10u,33u,167u,0u},
  {922u,28u,39u,139u,0u},
  {922u,42u,56u,138u,0u},
  {923u,20u,38u,139u,0u},
@@ -66,8 +67,22 @@ static const WildsStrike wilds_strikes[]={
  {921u,26u,38u,181u,0u},
  {921u,46u,54u,182u,0u},
  {921u,73u,86u,183u,0u},
+ {905u,34u,59u,192u,0u},
+ {913u,8u,16u,193u,0u},
+ {914u,13u,20u,194u,0u},
+ {914u,24u,35u,194u,0u},
+ {926u,44u,55u,195u,0u},
+ {926u,67u,76u,195u,0u},
+ {926u,95u,104u,195u,0u},
+ {927u,9u,23u,196u,0u},
+ {927u,33u,42u,196u,0u},
+ {928u,10u,19u,197u,0u},
+ {928u,33u,42u,197u,0u},
+ {929u,11u,19u,198u,0u},
+ {929u,26u,37u,198u,0u},
+ {930u,37u,56u,199u,0u},
 };
-#define WILDS_HIT_COUNT 192u
+#define WILDS_HIT_COUNT 200u
 #define WILDS_SHAPE 15u
 static const WildsClip *wilds_clip(unsigned source){for(unsigned i=0;i<sizeof(wilds_clips)/sizeof(*wilds_clips);++i)if(wilds_clips[i].source==source)return wilds_clips+i;return 0;}
 #define WILDS_RELEASE_ROW 168u

@@ -30,7 +30,9 @@ static unsigned world_focus_heading(void *a,unsigned *heading)
         return 0;
     }
     unsigned epoch=byte(a,AREA);
-    unsigned free_facing=!world.move&&(byte(a,DRAWN)&1)&&u16(a,STATE)<=2;
+    /* An evade also has common state 1. Reacquire Focus from the
+     * actual exit heading once idle or walking resumes. */
+    unsigned free_facing=!world.move&&(byte(a,DRAWN)&1)&&u16(a,STATE)<=2&&u16(a,ACTION)<=5;
     if(focus_facing.actor!=(u32)(uptr)a||focus_facing.epoch!=epoch||
        (free_facing&&!focus_facing.free_facing)){
         focus_facing.actor=(u32)(uptr)a;focus_facing.epoch=epoch;

@@ -170,6 +170,25 @@ static float att_sqrt(float v){float x;__asm__("vsqrt.f32 %0, %1":"=t"(x):"t"(v)
 /* The scabbard retains the weapon model's actual back placement while
  * drawn. The private timeout has no GU placement-table row of its own. */
 static struct {void *owner;unsigned epoch,model;float pose[12];} back_rest[2];
+static unsigned equipment_joint_pose(void *a,void *o,unsigned joint,float *v)
+{
+    const float *p=((const float *(*)(void *,u32))(*(uptr **)a)[0x54/4])(a,joint);
+    const float *m=(const float *)((uptr)o+0xb0);
+    if(!p)return 0;
+    float rot[9];
+    for(unsigned i=0;i<3;++i){
+        float x=p[i*4],y=p[i*4+1],z=p[i*4+2],nn=x*x+y*y+z*z;
+        if(!(nn>.01f&&nn<100))return 0;
+        v[i]=(x*(m[12]-p[12])+y*(m[13]-p[13])+z*(m[14]-p[14]))/nn;
+        for(unsigned j=0;j<3;++j)rot[i*3+j]=(x*m[j*4]+y*m[j*4+1]+z*m[j*4+2])/nn;
+    }
+    float *q=v+3,diag=rot[0]+rot[4]+rot[8];
+    if(diag>0){float t=2*att_sqrt(1+diag);q[3]=t*.25f;q[0]=(rot[7]-rot[5])/t;q[1]=(rot[2]-rot[6])/t;q[2]=(rot[3]-rot[1])/t;}
+    else {unsigned i=rot[0]>rot[4]?0:1;if(rot[8]>rot[i*3+i])i=2;unsigned j=(i+1)%3,k=(i+2)%3;
+        float t=2*att_sqrt(1+rot[3*i+i]-rot[3*j+j]-rot[3*k+k]);if(!(t>.01f))return 0;
+        q[i]=t*.25f;q[j]=(rot[3*i+j]+rot[3*j+i])/t;q[k]=(rot[3*i+k]+rot[3*k+i])/t;q[3]=(rot[3*k+j]-rot[3*j+k])/t;}
+    return 1;
+}
 static unsigned holster_pose(void *a,void *o,unsigned ix,unsigned prior,float *out,u32 *joint,u32 *closed)
 {
     float f=real(a,FRAME);
@@ -189,21 +208,7 @@ static unsigned holster_pose(void *a,void *o,unsigned ix,unsigned prior,float *o
     *joint=round?2:word(o,0x13cc);*closed=1;
     if(*joint>=255)return 0;
     if(!holster[ix].object && prior && f<start+5){
-        const float *p=((const float *(*)(void *,u32))(*(uptr **)a)[0x54/4])(a,*joint);
-        const float *m=(const float *)((uptr)o+0xb0);
-        if(!p)return 0;
-        float rot[9],*v=holster[ix].pose;
-        for(unsigned i=0;i<3;++i){
-            float x=p[i*4],y=p[i*4+1],z=p[i*4+2],nn=x*x+y*y+z*z;
-            if(!(nn>.01f&&nn<100))return 0;
-            v[i]=(x*(m[12]-p[12])+y*(m[13]-p[13])+z*(m[14]-p[14]))/nn;
-            for(unsigned j=0;j<3;++j)rot[i*3+j]=(x*m[j*4]+y*m[j*4+1]+z*m[j*4+2])/nn;
-        }
-        float *q=v+3,diag=rot[0]+rot[4]+rot[8];
-        if(diag>0){float t=2*att_sqrt(1+diag);q[3]=t*.25f;q[0]=(rot[7]-rot[5])/t;q[1]=(rot[2]-rot[6])/t;q[2]=(rot[3]-rot[1])/t;}
-        else {unsigned i=rot[0]>rot[4]?0:1;if(rot[8]>rot[i*3+i])i=2;unsigned j=(i+1)%3,k=(i+2)%3;
-            float t=2*att_sqrt(1+rot[3*i+i]-rot[3*j+j]-rot[3*k+k]);if(!(t>.01f))return 0;
-            q[i]=t*.25f;q[j]=(rot[3*i+j]+rot[3*j+i])/t;q[k]=(rot[3*i+k]+rot[3*k+i])/t;q[3]=(rot[3*k+j]-rot[3*j+k])/t;}
+        if(!equipment_joint_pose(a,o,*joint,holster[ix].pose))return 0;
         holster[ix].object=o;holster[ix].owner=a;holster[ix].epoch=byte(a,AREA);holster[ix].last=f;
     }
     unsigned active=holster[ix].object==o&&holster[ix].owner==a&&holster[ix].epoch==byte(a,AREA);
@@ -221,6 +226,34 @@ static unsigned holster_pose(void *a,void *o,unsigned ix,unsigned prior,float *o
     if(!(n>.001f))return 0;n=att_sqrt(n);for(unsigned i=0;i<4;++i)out[4+i]/=n;
     return 1;
 }
+#if ML_WILDS_MOVES
+static struct {void *actor,*object;unsigned motion,epoch;float pose[7],start[7];unsigned blend;} handoff;
+static void spirit_two_grip(void *a,void *o,unsigned motion,float *pose)
+{
+    float frame=real(a,FRAME);
+    unsigned valid=handoff.actor==a&&handoff.object==o&&handoff.epoch==byte(a,AREA);
+    if(!valid||motion!=handoff.motion){
+        handoff.blend=motion>=0x554&&motion<=0x557&&frame<8;
+        if(handoff.blend){
+            if(valid)for(unsigned i=0;i<7;++i)handoff.start[i]=handoff.pose[i];
+            else handoff.blend=equipment_joint_pose(a,o,12,handoff.start);
+        }
+    }
+    if(handoff.blend&&frame>=0&&frame<8){
+        float t=frame/8;t=t*t*(3-2*t);
+        for(unsigned i=0;i<3;++i)pose[i]=handoff.start[i]+(pose[i]-handoff.start[i])*t;
+        float dot=0,n=0;
+        for(unsigned i=0;i<4;++i)dot+=handoff.start[3+i]*pose[4+i];
+        for(unsigned i=0;i<4;++i){
+            pose[4+i]=handoff.start[3+i]*(1-t)+pose[4+i]*(dot<0?-t:t);
+            n+=pose[4+i]*pose[4+i];
+        }
+        n=att_sqrt(n);if(n>0)for(unsigned i=0;i<4;++i)pose[4+i]/=n;
+    }else handoff.blend=0;
+    for(unsigned i=0;i<7;++i)handoff.pose[i]=pose[i+(i>=3)];
+    handoff.actor=a;handoff.object=o;handoff.epoch=byte(a,AREA);handoff.motion=motion;
+}
+#endif
 static u32 preview_placement(void *object,u32 owner,u32 role,u32 flags)
 {
     unsigned ix=role==10?1:0;
@@ -261,10 +294,17 @@ static u32 preview_placement(void *object,u32 owner,u32 role,u32 flags)
     round_holster=role==9&&u16(a,MOTION)==0x500+219&&real(a,FRAME)>=136&&
         holster_pose(a,object,ix,prior,pose,&joint,&closed);
 #endif
+#if ML_WILDS_MOVES
+    if(role==9&&!private_pose)handoff.actor=0;
+#endif
     if(!round_holster){
         if(wilds_back||attachment_pose(a,role,pose,&joint,&closed))holster[ix].object=0;
         else if(!holster_pose(a,object,ix,prior,pose,&joint,&closed))return result;
     }
+#if ML_WILDS_MOVES
+    if(role==9&&private_pose&&joint==12&&!closed)spirit_two_grip(a,object,motion,pose);
+    else if(role==9)handoff.actor=0;
+#endif
     attachment_native[ix].object=(u32)(uptr)object;attachment_native[ix].owner=owner;
     for(unsigned i=0;i<12;++i)attachment_native[ix].pose[i]=word(object,0x40+4*i);
     attachment_native[ix].previous=word(object,0x13c8);
@@ -458,6 +498,14 @@ static u32 update(void *a,u32 b,u32 c,u32 d,NativeCall original)
 {
     if(update_depth)return original(a,b,c,d);
     if(!local_supported(a)){
+#if ML_WORLD_PRESENTATION && ML_WILDS_MOVES && WORLD_AUDIO_WEAPON
+        /* Native styles also share the replaced Long Sword weapon banks. */
+        if(a&&word(a,0)==main_base+VT&&(word(a,0x13cc)&1)){
+            world_audio_live_actor=(u32)(uptr)a;
+            world_audio_live_epoch=byte(a,AREA);
+            world_audio_load(a);
+        }
+#endif
         if(controller.actor==(u32)(uptr)a)ml_reset(&controller);
 #if ML_WORLD_COMBAT
         if(world.actor==(u32)(uptr)a){

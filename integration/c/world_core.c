@@ -70,7 +70,7 @@ const WClip *w_clip(unsigned source)
 }
 const WEvent *w_event(unsigned source,float frame)
 {
-    if((source>=901&&source<=918)||(source>=W_CRIMSON_STATIONARY&&source<=W_SPIRIT_TWO_BACK)){
+    if((source>=901&&source<=918)||(source>=W_CRIMSON_STATIONARY&&source<=W_CRIMSON_SPIN)){
         static const WEvent wilds_event={.speed=1,.hit=-1};
         return &wilds_event;
     }
@@ -273,7 +273,10 @@ unsigned w_rotation(WState *s,const WObservation *o,unsigned *heading)
                 if(!clamp||magnitude>maximum)delta=delta<0?-(int)maximum:(int)maximum;
             }
             s->turn_origin=b->heading;s->turn_delta=delta;
-            s->turn_duration=duration;s->turn_age=0;
+            /* t*(2-t) starts at twice its mean speed. Give large
+             * triggered corrections enough time to expose intermediate poses. */
+            float smooth=(float)(delta<0?-delta:delta)/65536.f;
+            s->turn_duration=duration>smooth?duration:smooth;s->turn_age=0;
         }
     }
     if(!(s->turn_duration>0)){
@@ -331,6 +334,12 @@ WDecision w_leave(WState *s)
     s->helm_cost_pending=0;s->red_foresight_chain=0;
     s->move=s->bound=s->queued=0;s->source=s->slot=0;s->ground_node=s->main_source=0;return d;
 }
+/* Free movement turns into the stick. Focus holds a camera-relative
+ * facing, which makes a lateral step or a backward-facing cut meaningful. */
+static unsigned directional_facing(const WObservation *o,unsigned input)
+{
+    return o->has_focus_heading?o->focus_camera_heading:input;
+}
 #if ML_WILDS_MOVES
 static unsigned crimson_one(const WObservation *o,unsigned *heading,unsigned *direction)
 {
@@ -338,7 +347,7 @@ static unsigned crimson_one(const WObservation *o,unsigned *heading,unsigned *di
     *heading=b->heading;
     *direction=0;
     if(b->magnitude<50)return W_CRIMSON_STATIONARY;
-    unsigned reference=o->has_crimson_yaw?o->crimson_yaw:b->heading;
+    unsigned reference=directional_facing(o,b->input_heading);
     int angle=ml_heading_delta(b->input_heading,reference);
     *heading=b->input_heading;
     *direction=W_CRIMSON_DIRECTIONAL;
@@ -373,7 +382,7 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
     s->wilds_stage=2;
     s->wilds_direction_pending=0;
     if(move==W_SLIDE&&o->base.magnitude>=50){
-        int delta=ml_heading_delta(o->base.input_heading,o->base.heading);
+        int delta=ml_heading_delta(o->base.input_heading,directional_facing(o,o->base.input_heading));
         s->source=delta>=8192&&delta<=24576?911:delta<=-8192&&delta>=-24576?910:delta>24576||delta< -24576?912:903;
     }
     s->wilds_tier=1;s->wilds_elapsed=s->wilds_buffer=s->wilds_roll_buffer=s->wilds_r_wait=0;s->wilds_r_pending=0;
@@ -381,7 +390,7 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
     s->wilds_previous=o->base.held;s->wilds_sample=o->base.sample_sequence;
     s->slot=w_clip(s->source)->slot;s->bound=0;s->last_frame=0;
     s->counter_success=s->hit_success=s->rank_paid=s->follow_ready=0;
-    s->wilds_iai_recovered=s->wilds_focus_break=s->iai_focus_locked=0;
+    s->wilds_iai_recovered=s->wilds_focus_break=s->focus_finisher=s->iai_focus_locked=0;
     s->iai_follow_keys=0;s->iai_follow_wait=0;
     s->hold_seconds=0;s->consumed|=mask;s->queued=0;
     s->ground_node=s->main_source=0;s->entry_start=0;
@@ -399,8 +408,19 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
     }
 #if ML_WILDS_MOVES
     if(move==W_CHIJIN)s->heading=crimson_heading;
+    if(move==W_SLIDE&&o->base.magnitude>=50)s->heading=directional_facing(o,o->base.input_heading);
 #endif
     d.source=s->source;d.slot=s->slot;d.heading=s->heading;
+#if ML_WILDS_MOVES
+    /* Blend from the native Valor opener only after its guard window ends.
+     * Start the slide clock at frame zero so movement and strikes stay in sync. */
+    if(move==W_SLIDE && o->valor && o->state==16 && o->base.native_action==130 &&
+       o->base.motion==0x5c0){
+        d.motion_contract=1;
+        d.blend=8.0f;
+        d.speed=1.0f;
+    }
+#endif
     if(move>=W_RISE&&move<=W_LAND){
         const WMotionLink *link=w_motion_link(d.source,previous,W_BANK_W03_00,o->base.animation_frame);
         if(link){d.motion_contract=1;d.start=s->entry_start=link->start;d.blend=link->blend;d.speed=link->speed;}
@@ -598,7 +618,7 @@ WDecision w_step(WState *s,const WObservation *o)
             if(s->move==W_SMALL)d.regen_seconds=s->counter_success?30:15;
             if(s->move==W_FORESIGHT&&s->source!=918&&s->counter_success)d.gauge_fill=1;
         }
-        if(s->move==W_CHARGE&&s->source==917&&s->hit_success&&!s->rank_paid){
+        if(s->move==W_CHARGE&&(s->source==917||s->source==W_CRIMSON_SPIN)&&s->hit_success&&!s->rank_paid){
             s->rank_paid=1;spirit_round_reward(&d,o->rank);
         }
         if(s->move==W_BIG&&frame>=37&&!s->rank_paid){
