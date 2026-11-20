@@ -127,7 +127,7 @@ static unsigned attachment_pose(void *a,u32 role,float *out,u32 *joint,u32 *clos
     if(role==9&&wc){
         /* Once HunterBasic turns the weapon OFF, native placement owns the
          * closed blade on its scabbard. Do not reattach it to the hand. */
-        if((wc->source==917&&frame>=150)||(wc->source==904&&frame>=140))return 0;
+        if(wc->source==904&&frame>=140)return 0;
         unsigned n=(unsigned)frame;if(n>=wc->frames)n=wc->frames-1;
         unsigned next=n+1<wc->frames?n+1:n;float t=frame-(float)n;if(t>1)t=1;
         const float *x=weapon_samples[wc->offset+n],*y=weapon_samples[wc->offset+next];
@@ -170,6 +170,61 @@ static float att_sqrt(float v){float x;__asm__("vsqrt.f32 %0, %1":"=t"(x):"t"(v)
 /* The scabbard retains the weapon model's actual back placement while
  * drawn. The private timeout has no GU placement-table row of its own. */
 static struct {void *owner;unsigned epoch,model;float pose[12];} back_rest[2];
+#if ML_WILDS_MOVES
+static unsigned ported_round_motion(unsigned motion)
+{
+    return motion==0x500+148||motion==0x500+219;
+}
+static unsigned shortened_round(void *a,unsigned motion)
+{
+    void *resource=(void *)(uptr)word(a,0xf18);
+    const void *bank=resource?(void *)(uptr)word(resource,0x64):0;
+    unsigned slot=motion-0x500;
+    if(!bank||word(bank,0)!=0x00544d4c||slot>=u16(bank,6))return 0;
+    const void *descriptor=(const void *)(uptr)word(bank,8+slot*4);
+    return descriptor&&word(descriptor,8)==W_ROUND_FRAMES;
+}
+typedef u32 (__attribute__((pcs("aapcs-vfp"))) *NativeFrameCrossing)(void *,float);
+static NativeFrameCrossing original_frame_crossing;
+static u32 __attribute__((pcs("aapcs-vfp"))) round_frame_crossing(void *a,float frame)
+{
+    /* GU's action 30 uses this call site to enter its sheathing phase. */
+    if((uptr)__builtin_return_address(0)==main_base+0x119b7f4&&u16(a,MOTION)==0x500+127&&
+       shortened_round(a,0x500+127))frame=W_ROUND_SHEATHE_FRAME;
+    return original_frame_crossing(a,frame);
+}
+static void attachment_multiply(const float *a,const float *b,float *out)
+{
+    for(unsigned i=0;i<3;++i){
+        unsigned j=(i+1)%3,k=(i+2)%3;
+        out[i]=a[3]*b[i]+b[3]*a[i]+a[j]*b[k]-a[k]*b[j];
+    }
+    out[3]=a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2];
+}
+static void seat_special_sheathe(void *a,float *pose,u32 *joint)
+{
+    for(unsigned i=0;i<2;++i)
+        if(back_rest[i].owner!=a||back_rest[i].epoch!=byte(a,AREA)||
+           back_rest[i].model!=word(a,0x23a0+4*i))return;
+    float sheath[12];u32 parent,closed;
+    if(!attachment_pose(a,10,sheath,&parent,&closed))return;
+    const float *blade=back_rest[0].pose,*rest=back_rest[1].pose;
+    float inv[4]={-rest[4],-rest[5],-rest[6],rest[7]};
+    if(!(rest[8]>.01f&&rest[9]>.01f&&rest[10]>.01f))return;
+    float scale=sheath[8]/rest[8];
+    float rotation[4],inverse[4],delta[4],step[4],placed[4];
+    attachment_multiply(sheath+4,inv,rotation);
+    for(unsigned i=0;i<3;++i){delta[i]=(blade[i]-rest[i])*scale;inverse[i]=-rotation[i];}
+    delta[3]=0;inverse[3]=rotation[3];
+    attachment_multiply(rotation,delta,step);
+    attachment_multiply(step,inverse,placed);
+    for(unsigned i=0;i<3;++i)pose[i]=sheath[i]+placed[i];
+    attachment_multiply(rotation,blade+4,pose+4);
+    for(unsigned i=8;i<11;++i)pose[i]=blade[i]*sheath[i]/rest[i];
+    pose[11]=blade[11];
+    *joint=parent;
+}
+#endif
 static unsigned equipment_joint_pose(void *a,void *o,unsigned joint,float *v)
 {
     const float *p=((const float *(*)(void *,u32))(*(uptr **)a)[0x54/4])(a,joint);
@@ -192,34 +247,21 @@ static unsigned equipment_joint_pose(void *a,void *o,unsigned joint,float *v)
 static unsigned holster_pose(void *a,void *o,unsigned ix,unsigned prior,float *out,u32 *joint,u32 *closed)
 {
     float f=real(a,FRAME);
-    unsigned motion=u16(a,MOTION),round=0;
-#if ML_WILDS_MOVES
-    round=ix==0&&motion==0x500+219;
-#endif
-    float start=round?136:34,finish=round?150:68;
-    if((!round&&motion!=0x5f6)||!(f>=start&&f<(round?176:90))){holster[ix].object=0;return 0;}
-    unsigned rest_ix=round?0:1;
-    unsigned rest=back_rest[rest_ix].owner==a&&back_rest[rest_ix].epoch==byte(a,AREA)&&
-        back_rest[rest_ix].model==word(a,round?0x23a0:0x23a4);
-    if(round&&!rest){
-        rest_ix=1;
-        rest=back_rest[1].owner==a&&back_rest[1].epoch==byte(a,AREA)&&back_rest[1].model==word(a,0x23a4);
-    }
-    *joint=round?2:word(o,0x13cc);*closed=1;
+    const float start=34,finish=68;
+    if(u16(a,MOTION)!=0x5f6||!(f>=start&&f<90)){holster[ix].object=0;return 0;}
+    unsigned rest=back_rest[1].owner==a&&back_rest[1].epoch==byte(a,AREA)&&
+        back_rest[1].model==word(a,0x23a4);
+    *joint=word(o,0x13cc);*closed=1;
     if(*joint>=255)return 0;
     if(!holster[ix].object && prior && f<start+5){
         if(!equipment_joint_pose(a,o,*joint,holster[ix].pose))return 0;
         holster[ix].object=o;holster[ix].owner=a;holster[ix].epoch=byte(a,AREA);holster[ix].last=f;
     }
     unsigned active=holster[ix].object==o&&holster[ix].owner==a&&holster[ix].epoch==byte(a,AREA);
-    if(round&&f>=finish&&rest){
-        for(unsigned i=0;i<12;++i)out[i]=back_rest[rest_ix].pose[i];
-        return 1;
-    }
-    if(!active||holster[ix].last>f|| (round&&!rest))return 0;
+    if(!active||holster[ix].last>f)return 0;
     holster[ix].last=f;
     float t=(f-start)/(finish-start);if(t>1)t=1;t=t*t*(3-2*t);float *v=holster[ix].pose;
-    for(unsigned i=0;i<12;++i)out[i]=rest?back_rest[rest_ix].pose[i]:real(o,0x40+i*4);
+    for(unsigned i=0;i<12;++i)out[i]=rest?back_rest[1].pose[i]:real(o,0x40+i*4);
     for(unsigned i=0;i<3;++i)out[i]=v[i]+t*(out[i]-v[i]);
     float dot=0,n=0;for(unsigned i=0;i<4;++i)dot+=v[3+i]*out[4+i];
     for(unsigned i=0;i<4;++i){out[4+i]=v[3+i]*(1-t)+(dot<0?-t:t)*out[4+i];n+=out[4+i]*out[4+i];}
@@ -254,8 +296,16 @@ static void spirit_two_grip(void *a,void *o,unsigned motion,float *pose)
     handoff.actor=a;handoff.object=o;handoff.epoch=byte(a,AREA);handoff.motion=motion;
 }
 #endif
-static u32 preview_placement(void *object,u32 owner,u32 role,u32 flags)
+static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
 {
+    void *a=(void *)(uptr)owner;
+    unsigned role=native_role,scabbard=0;
+#if ML_WILDS_MOVES
+    if(native_role==25&&local_supported(a)&&word(a,0x23a4)==(u32)(uptr)object){
+        role=10;
+        scabbard=1;
+    }
+#endif
     unsigned ix=role==10?1:0;
     unsigned prior=attachment_native[ix].active&&attachment_native[ix].object==(u32)(uptr)object&&attachment_native[ix].owner==owner;
     if((role==9||role==10)&&attachment_native[ix].active){
@@ -268,40 +318,45 @@ static u32 preview_placement(void *object,u32 owner,u32 role,u32 flags)
         }
         attachment_native[ix].active=0;
     }
-    u32 result=original_placement(object,owner,role,flags);
-    void *a=(void *)(uptr)owner;float pose[12];u32 joint,closed;
-    if((role!=9&&role!=10)||!local_supported(a))return result;
+    float pose[12];u32 joint,closed;
+    if((role!=9&&role!=10)||!local_supported(a))return original_placement(object,owner,native_role,flags);
     unsigned motion=u16(a,MOTION),private_pose=0;
+#if ML_WILDS_MOVES
+    if(ported_round_motion(motion)){
+        *(uint16_t *)((uptr)a+MOTION)=0x500+127;
+        u32 result=original_placement(object,owner,native_role,flags);
+        *(uint16_t *)((uptr)a+MOTION)=(uint16_t)motion;
+        holster[ix].object=0;
+        if(role==9)handoff.actor=0;
+        return result;
+    }
+#endif
+    u32 result=original_placement(object,owner,native_role,flags);
 #if ML_WILDS_MOVES
     private_pose=focus_walk_clip(motion)!=0;
     for(unsigned i=0;!private_pose&&i<sizeof(wilds_clips)/sizeof(*wilds_clips);++i)
         private_pose=motion==0x500+wilds_clips[i].slot;
 #endif
-    if(!private_pose&&motion!=0x500+219&&(role==10||!(byte(a,DRAWN)&1))&&
+    if(!private_pose&&(role==10||!(byte(a,DRAWN)&1))&&
        word(object,0x13cc)==2&&word(object,0x13d4)==2&&word(object,0x1408)&&
        (motion>>8!=5||motion<0x5e0)){
         back_rest[ix].owner=a;back_rest[ix].epoch=byte(a,AREA);back_rest[ix].model=(u32)(uptr)object;
         for(unsigned i=0;i<12;++i)back_rest[ix].pose[i]=real(object,0x40+4*i);
     }
+    if(scabbard&&motion!=0x500+230)return result;
     unsigned wilds_back=private_pose&&role==10&&back_rest[1].owner==a&&
         back_rest[1].epoch==byte(a,AREA)&&back_rest[1].model==(u32)(uptr)object;
     if(wilds_back){
         for(unsigned j=0;j<12;++j)pose[j]=back_rest[1].pose[j];
         joint=2;closed=1;
     }
-    unsigned round_holster=0;
-#if ML_WILDS_MOVES
-    round_holster=role==9&&u16(a,MOTION)==0x500+219&&real(a,FRAME)>=136&&
-        holster_pose(a,object,ix,prior,pose,&joint,&closed);
-#endif
 #if ML_WILDS_MOVES
     if(role==9&&!private_pose)handoff.actor=0;
 #endif
-    if(!round_holster){
-        if(wilds_back||attachment_pose(a,role,pose,&joint,&closed))holster[ix].object=0;
-        else if(!holster_pose(a,object,ix,prior,pose,&joint,&closed))return result;
-    }
+    if(wilds_back||attachment_pose(a,role,pose,&joint,&closed))holster[ix].object=0;
+    else if(!holster_pose(a,object,ix,prior,pose,&joint,&closed))return result;
 #if ML_WILDS_MOVES
+    if(role==9&&motion==0x500+230&&closed)seat_special_sheathe(a,pose,&joint);
     if(role==9&&private_pose&&joint==12&&!closed)spirit_two_grip(a,object,motion,pose);
     else if(role==9)handoff.actor=0;
 #endif
@@ -325,11 +380,22 @@ static u32 preview_equipment_motion(void *object,u32 owner,u32 c,u32 d)
     if(word(object,0x13d0)==9&&local_supported(a)){
         unsigned motion=u16(a,MOTION);float frame=real(a,FRAME);
 #if ML_WILDS_MOVES
+        if(ported_round_motion(motion)||motion==0x500+127){
+            /* The native blade layers still use GU's uncut animation. */
+            float *clock=(float *)((uptr)a+FRAME);
+            if(motion!=0x500+148&&frame>=W_ROUND_TAIL_FRAME&&shortened_round(a,motion))
+                *clock=frame+W_ROUND_CUT_FRAMES;
+            *(uint16_t *)((uptr)a+MOTION)=0x500+127;
+            u32 result=original_equipment_motion(object,owner,c,d);
+            *(uint16_t *)((uptr)a+MOTION)=(uint16_t)motion;
+            *clock=frame;
+            return result;
+        }
         unsigned wilds=0;
         for(unsigned i=0;i<sizeof(wilds_clips)/sizeof(*wilds_clips);++i)
             if(motion==0x500+wilds_clips[i].slot){wilds=1;break;}
         if(wilds||focus_walk_clip(motion)){
-            unsigned closed=(motion==0x500+219&&frame>=150)||(motion==0x500+250&&frame>=140);
+            unsigned closed=motion==0x500+250&&frame>=140;
             if(u16(object,0x5f4)!=0xffffu)
                 ((NativeLayer)(main_base+0x954640))(object,1,0xffffu,0,0,0,1);
             if(u16(object,MOTION)!=(closed?0:1))
@@ -483,9 +549,19 @@ static uptr __attribute__((pcs("aapcs-vfp"))) layer_hook(void *a,u32 layer,u32 m
         world_idle_actor=0;
         if(world_idle_epoch==byte(a,AREA)&&u16(a,MOTION)==world_idle_motion){
             log_event("world_idle_bind",(u32)(uptr)a,motion,flags,(u32)blend);
-            if(motion==5001u && blend<8){flags|=0x81u;blend=8;}
+            unsigned release_idle=world_idle_motion==0x500+250;
+            float idle_blend=release_idle?12.f:8.f;
+            if((motion==5001u||(release_idle&&motion==1u))&&blend<idle_blend){
+                flags|=0x81u;blend=idle_blend;
+            }
         }
     }
+#endif
+#if ML_WILDS_MOVES
+    /* GU rebinds its roundslash at the sheathing frame in action 31. */
+    if(!layer&&motion==5127&&u16(a,STATE)==16&&u16(a,ACTION)==31&&
+       start==W_ROUND_SHEATHE_FRAME+W_ROUND_CUT_FRAMES&&shortened_round(a,0x500+127))
+        start=W_ROUND_SHEATHE_FRAME;
 #endif
     uptr result=original_layer(a,layer,motion,flags,blend,start,speed);
     if(layer==0&&motion!=0xffffu&&local_supported(a)){

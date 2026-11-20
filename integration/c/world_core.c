@@ -602,7 +602,7 @@ WDecision w_step(WState *s,const WObservation *o)
     }
     unsigned sheathing=s->move==W_SHEATHE_END;
 #if ML_WILDS_MOVES
-    sheathing|=(s->source==917&&b->animation_frame>=150)||(s->source==904&&b->animation_frame>=140);
+    sheathing|=(s->source==917&&b->animation_frame>=W_ROUND_SHEATHE_FRAME)||(s->source==904&&b->animation_frame>=140);
 #endif
     if(!o->alive||(!o->drawn&&!sheathing)||!o->resources_ready){if(!s->move){s->controls=(WControls){0};return d;}d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
     w_keys_tick(&s->keys,b);

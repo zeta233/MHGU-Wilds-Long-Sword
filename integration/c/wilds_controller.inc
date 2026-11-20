@@ -62,7 +62,7 @@ static WDecision wilds_spirit(WState *s,const WObservation *o)
     if(s->source==902){
         if(!spirit_available(o,25))return (WDecision){0};
         s->wilds_tier=4;
-        WDecision d=wilds_phase(s,o,916);
+        WDecision d=wilds_phase(s,o,917);
         if(o->rank!=3)d.gauge_delta=-25;
         return d;
     }
@@ -100,7 +100,7 @@ static WDecision wilds_round(WState *s,const WObservation *o)
     if(!spirit_available(o,25))return (WDecision){0};
     WDecision d=w_wilds_enter(s,o,W_CHARGE);if(d.kind!=W_ENTER)return d;
     if(o->rank!=3)d.gauge_delta=-25;
-    s->wilds_tier=4;s->wilds_stage=4;s->source=916;s->slot=w_clip(916)->slot;
+    s->wilds_tier=4;s->wilds_stage=4;s->source=917;s->slot=w_clip(917)->slot;
     d.source=s->source;d.slot=s->slot;return d;
 }
 /* The stock Spirit actions still own their native hit and gauge logic. This
@@ -286,7 +286,7 @@ static WDecision wilds_step(WState *s,const WObservation *o)
             if(s->wilds_elapsed>=2.9f)stage=4;
             else if(s->wilds_elapsed>=1.6f&&stage<3)stage=3;
             if(stage==2)return wilds_native(s,o,o->valor?116:23);
-            return wilds_phase(s,o,stage==4?916:902);
+            return wilds_phase(s,o,stage==4?917:902);
         }
         WDecision d={0};
         s->wilds_gauge_fraction+=dt*10;
@@ -302,7 +302,7 @@ static WDecision wilds_step(WState *s,const WObservation *o)
      * R+B chord cannot be stolen by a leading solo R request. */
     unsigned spirit_link=s->move==W_CHIJIN||s->move==W_SLIDE||s->move==W_FOCUS||s->source==902;
     /* MOT 287 plants the feet and finishes its backward cut at frame 40.
-     * Let solo R take over there. The later X chain still uses frame 90. */
+     * Let solo R take over there. */
     unsigned crimson=s->move==W_CHIJIN;
     unsigned retreat_spirit=crimson&&s->source==W_CRIMSON_RETREAT;
     /* A solo R during a Crimson swing is one queued follow-up. Keep the
@@ -337,7 +337,6 @@ static WDecision wilds_step(WState *s,const WObservation *o)
             s->wilds_roll_buffer=0;
         }else return wilds_finish(s,W_ROLL,s->wilds_roll_heading);
     }
-    if(s->source==916&&(b->motion_finished||frame>=clip->frames-2))return wilds_phase(s,o,917);
     unsigned finish=frame>=(s->source==917?(s->red_foresight_chain?105:clip->frames-1):clip->recovery)||
         b->motion_finished;
     if(s->source==918&&wilds_red_follow_r(s,b,pressed,clip->cancel)){
@@ -349,9 +348,10 @@ static WDecision wilds_step(WState *s,const WObservation *o)
         return d;
     }
     if(s->move==W_CHIJIN){
-        /* Wilds MOT 287 accepts the next X from frame 60 and branches at 90. */
+        /* Queue Crimson II during the retreat sweep and release it after
+         * the blade stops. Other retreat follow-ups retain their own timing. */
         unsigned retreat=s->source==W_CRIMSON_RETREAT;
-        unsigned buffer_begin=retreat?60:clip->cancel-18;
+        unsigned buffer_begin=retreat?26:clip->cancel-18;
         if((pressed&ML_X)&&!(b->held&(ML_A|ML_R|ML_ZR))&&frame>=buffer_begin){
             s->wilds_buffer=retreat?.75f:.35f;
             s->crimson_buffer_direction=b->magnitude>=50;
@@ -365,7 +365,8 @@ static WDecision wilds_step(WState *s,const WObservation *o)
             s->crimson_buffer_source=0;
             s->crimson_buffer_direction=wilds_fade_action(o);
         }
-        if(frame>=clip->cancel&&s->wilds_buffer>0){
+        unsigned cancel=retreat&&s->crimson_buffer_source?44:clip->cancel;
+        if(frame>=cancel&&s->wilds_buffer>0){
             if(o->valor){
                 if(!s->crimson_buffer_source)return wilds_native(s,o,s->crimson_buffer_direction);
                 /* X may be the first half of a fade slash at the cancel boundary. */
@@ -406,7 +407,10 @@ static WDecision wilds_step(WState *s,const WObservation *o)
         if((pressed&ML_X)&&s->move!=W_CHIJIN)return wilds_native(s,o,0);
         if(pressed&ML_A)return wilds_native(s,o,s->move==W_SLIDE?4:25);
     }
-    if(finish)return wilds_finish(s,W_IDLE,b->heading);
+    /* Let movement or a new command interrupt the stand-up from the old exit point. */
+    unsigned skip_rise=s->move==W_RELEASE&&frame>=W_RELEASE_RECOVERY_CANCEL&&
+        (b->magnitude>=50||(pressed&(ML_X|ML_A|ML_R|ML_Y)));
+    if(finish||skip_rise)return wilds_finish(s,W_IDLE,b->heading);
     return (WDecision){0};
 }
 #endif

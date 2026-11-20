@@ -4,7 +4,7 @@ MOVES=[
  ('red_1','286',247,901,244,44,95),
  ('charge_release','212',248,902,147,105,145),
  ('move_forward','222',249,903,157,53,100),
- ('release','295',250,904,148,126,205),
+ ('release','295',250,904,148,126,265),
  ('focus_start','460',251,905,144,68,94),
  ('red_2','288',208,906,244,53,108),
  ('red_3','289',209,907,244,77,122),
@@ -57,8 +57,11 @@ CRIMSON_STRIKES=[
  (906,906,[(28,36,11),(42,50,22)]),             # 288: 44,45
  (907,907,[(21,29,30),(45,52,18),(60,70,55)]),  # 289: 46,47,48
  (920,901,[(14,22,33),(32,40,16)]),             # 285: 41,42
- (921,901,[(26,38,30),(46,54,18),(73,86,55)]),  # 287: 46,47,48
+ (921,901,[(26,38,30)]),                      # 287: one animated sweep
 ]
+
+# Preserve the original ARC row indices for existing installations.
+RETIRED_CRIMSON_ROWS=[(901,18),(901,55)]
 
 # Wilds full-gauge Spirit I–III, empty-gauge Spirit I, and Roundslash
 # below red / at red. Clone the GU donors so the stock rows stay intact.

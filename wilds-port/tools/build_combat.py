@@ -1,6 +1,6 @@
 """Build a GU combat adaptation from traced, user-owned Wilds clips."""
 from portkit import *
-from combat_rules import MOVES,STRIKES,SHARED_STRIKES,CRIMSON_STRIKES,SPIRIT_NATIVE_ROWS,SPIRIT_ROUND_ROWS
+from combat_rules import MOVES,STRIKES,SHARED_STRIKES,CRIMSON_STRIKES,RETIRED_CRIMSON_ROWS,SPIRIT_NATIVE_ROWS,SPIRIT_ROUND_ROWS
 
 def fromto(a,b):
  a=np.asarray(a);b=np.asarray(b);a=a/np.linalg.norm(a);b=b/np.linalg.norm(b);d=np.dot(a,b)
@@ -50,15 +50,21 @@ def append_crimson_strikes(hdp,strikes):
  assert len(hdp)==16+56*row_count
  crimson_sources={source for source,_,_ in CRIMSON_STRIKES}
  result=[strike for strike in strikes if strike['source'] not in crimson_sources]
- for source,donor,cuts in CRIMSON_STRIKES:
+ def clone(donor,mv):
   donor_row=next(strike['row'] for strike in strikes if strike['source']==donor)
   offset=16+56*donor_row
+  record=bytearray(hdp[offset:offset+56])
+  struct.pack_into('<h',record,4,mv)
+  row=(len(hdp)-16)//56
+  hdp.extend(record)
+  return row
+ for source,donor,cuts in CRIMSON_STRIKES:
   for begin,end,mv in cuts:
-   record=bytearray(hdp[offset:offset+56])
-   struct.pack_into('<h',record,4,mv)
-   hdp.extend(record)
-   result.append(dict(source=source,begin=begin,end=end,row=row_count,tiered=False,motion_values=[mv]))
-   row_count+=1
+   row=clone(donor,mv)
+   result.append(dict(source=source,begin=begin,end=end,row=row,tiered=False,motion_values=[mv]))
+ for donor,mv in RETIRED_CRIMSON_ROWS:
+  clone(donor,mv)
+ row_count=(len(hdp)-16)//56
  struct.pack_into('<I',hdp,8,row_count)
  return result,row_count
 

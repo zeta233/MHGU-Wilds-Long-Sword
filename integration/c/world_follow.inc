@@ -383,18 +383,15 @@ static void world_follow_capture(void *a)
     log_event("world_follow_capture",(u32)(uptr)a,job->kind,tier,uid);
 }
 #if ML_WILDS_MOVES
-/* Extend the three blade sweeps by 20 cm overhead and 10 cm sideways.
- * Work on posed world geometry so "up" stays vertical even on a tilted blade.
+/* Raise the posed blade envelope without moving its lower edge.
  * Restore exact floats before GU visits the next target. */
-static u32 wilds_high_blade_query(void *manager,void *attack,void *target)
+static u32 wilds_high_blade_query(void *manager,void *attack,void *target,float lift)
 {
     void *resource=(void *)(uptr)word(attack,0x84);
     void *group=resource?((void *(*)(void *,unsigned))(*(uptr **)resource)[0x44/4])
         (resource,word(attack,0x88)):0;
     unsigned count=group?word(group,4):0,first=word(attack,0x1c);
     if(first>=64||count>64-first)return world_original_monster_query(manager,attack,target);
-    /* Extend release upward while preserving the lower edge of each volume. */
-    float lift=world.move==W_RELEASE?48.f:10.f;
     float saved[64][3];
     for(unsigned i=0;i<count;++i){
         void *v=(void *)((uptr)manager+0x2030+32*(first+i));
@@ -425,8 +422,17 @@ static u32 world_monster_query(void *manager,void *attack,void *target)
         for(unsigned i=0;i<10;++i)if(world_primary_cooldown[i].target==(u32)(uptr)target&&world_elapsed<world_primary_cooldown[i].next)return 0;
     }
 #if ML_WILDS_MOVES
-    unsigned high=own&&(world.move==W_THRUST||world.move==W_SMALL||world.move==W_RELEASE);
-    u32 result=high?wilds_high_blade_query(manager,attack,target):world_original_monster_query(manager,attack,target);
+    float lift=0;
+    if(own){
+        if(world.move==W_THRUST||world.move==W_SMALL)lift=10.f;
+        if(world.move==W_RELEASE||world.move==W_CHIJIN||
+           world.source==109||world.source==917||world.source==W_CRIMSON_SPIN)lift=48.f;
+    }else{
+        void *hunter=(void *)(uptr)word(attack,0xc);
+        if(hunter&&attack==(void *)((uptr)hunter+0x3020)&&local_supported(hunter)&&
+           u16(hunter,MOTION)==0x500+127)lift=48.f;
+    }
+    u32 result=lift?wilds_high_blade_query(manager,attack,target,lift):world_original_monster_query(manager,attack,target);
 #else
     u32 result=world_original_monster_query(manager,attack,target);
 #endif

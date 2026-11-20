@@ -13,6 +13,9 @@ enum { W_FOCUS_FLURRY=926,W_FOCUS_LEFT,W_FOCUS_RIGHT,W_FOCUS_BACK,W_CRIMSON_SPIN
 enum { W_CRIMSON_DIRECTIONAL=1,W_CRIMSON_LATERAL };
 enum { W_KEEP,W_ENTER,W_NATIVE,W_IDLE,W_ROLL,W_ABORT,W_NATIVE_R,W_MOTION };
 enum { W_RED_ROUND=1,W_RED_IAI=2 };
+enum { W_RELEASE_RECOVERY_CANCEL=205 };
+/* The roundslash archive removes 48 frames from the original GU timeline. */
+enum { W_ROUND_TAIL_FRAME=62,W_ROUND_CUT_FRAMES=48,W_ROUND_SHEATHE_FRAME=80,W_ROUND_FRAMES=111 };
 typedef struct {
     unsigned actor,epoch,sample,held,waiting,ready;
     float remaining[3];
