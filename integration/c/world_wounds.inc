@@ -7,6 +7,8 @@ typedef struct {
     const void *part_table;
     unsigned part_index;
     float fraction;
+    unsigned burst_damage,burst_shown;
+    float burst_offset[3];
 } WWound;
 typedef struct {
     void *target,*status;
@@ -20,6 +22,10 @@ static struct {
     unsigned area,region;
     float until;
 } wound_recoil;
+static struct {
+    void *target,*status;
+    unsigned actor,area,id,slot,region,bonus;
+} focus_burst;
 static int (*world_original_monster_reaction)(void *);
 static int (*world_original_monster_action)(void *,unsigned,unsigned,unsigned);
 static struct {
@@ -59,7 +65,7 @@ static int world_monster_action(void *target,unsigned group,unsigned action,unsi
     }
     return world_original_monster_action(target,group,action,mode);
 }
-extern void ml_wilds_wound(unsigned,unsigned);
+extern void ml_wilds_wound(unsigned,unsigned,unsigned);
 
 static void world_wound_owner(void *a)
 {
@@ -94,7 +100,7 @@ static int world_monster_reaction(void *target)
         *reaction=0;*region=previous;
     }
     unsigned action=u16(target,0x73e0);
-    if((action&255)==10){
+    if(world_original_monster_action&&(action&255)==10){
         focus_stagger.target=target;focus_stagger.status=status;focus_stagger.actor=world.actor;
         focus_stagger.area=wound_recoil.area;focus_stagger.action=action;focus_stagger.resting=0;
         log_event("wilds_wound_recoil",(u32)(uptr)target,wound_recoil.region,before,action);
@@ -172,6 +178,39 @@ static void world_wound_anchor(WWound *w,void *manager,void *target,void *status
     w->part_index=index;w->fraction=fraction;w->part_table=table;
 }
 
+/* Settle the reserved wound once the directional finisher closes its last hitbox. */
+static void world_finish_focus_burst(void *actor,float frame)
+{
+    if(!focus_burst.target)return;
+    unsigned end;
+    switch(world.source){
+    case 914:end=35;break;
+    case W_FOCUS_LEFT:case W_FOCUS_RIGHT:end=42;break;
+    case W_FOCUS_BACK:end=37;break;
+    default:return;
+    }
+    if(frame<end)return;
+    void *target=focus_burst.target,*status=focus_burst.status;
+    focus_burst.target=0;
+    const void *registry=(const void *)(uptr)word((void *)main_base,0x1851fe0);
+    if(world.move!=W_FOCUS||!world.wilds_focus_break||world.actor!=focus_burst.actor||
+       byte(actor,AREA)!=focus_burst.area||world_wound_slot(registry,target)!=focus_burst.slot||
+       word(target,0x1428)!=(u32)(uptr)status||byte(target,AREA)!=focus_burst.area||
+       u16(status,0x1b6)!=focus_burst.id||(int)word(status,0x370)<=0)return;
+    unsigned region=focus_burst.region,bonus=focus_burst.bonus;
+    WWound *w=wilds_wounds[focus_burst.slot].parts+region;
+    int applied=((int (*)(void *,unsigned,int,unsigned))(main_base+0x9d6f8))(target,region,(int)bonus,0);
+    w->burst_damage=applied>0?(unsigned)applied:0;
+    w->flash=world_elapsed+.85f;w->burst_shown=0;
+#if ML_WORLD_PRESENTATION
+    float pos[3];
+    if(!world_wound_position(target,w,pos))
+        for(unsigned k=0;k<3;++k)pos[k]=real(target,0x40+k*4)+w->burst_offset[k];
+    world_helm_impact(actor,pos);
+#endif
+    log_event("wilds_wound_burst",region,world.source,bonus,w->burst_damage);
+}
+
 static void world_monster_wound_damage(void *manager,void *attack,void *target,void *point,
                                        void *v1,void *v2,void *part,void *shape)
 {
@@ -210,7 +249,7 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
     if(focus&&!world.wilds_focus_break&&w->until<=world_elapsed){
         /* Adjacent GU hurt parts can win the same blade contact. Resolve
          * only a nearby, currently posed wound on the monster actually hit. */
-        float best=68.f*68.f;
+        float best=90.f*90.f;
         for(unsigned i=0;i<WOUND_PARTS;++i){
             WWound *candidate=monster->parts+i;
             float pos[3],d2=0;
@@ -225,10 +264,13 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
     }
     if(w->until>world_elapsed){
         if(!focus||world.wilds_focus_break)return;
-        w->progress=0;w->until=0;w->recover=world_elapsed+12;w->flash=world_elapsed+.45f;
+        w->progress=0;w->until=0;w->recover=world_elapsed+12;w->flash=0;
         world.wilds_focus_break=1;
         unsigned bonus=25+threshold/4;if(bonus>120)bonus=120;
-        ((void (*)(void *,unsigned,int,unsigned))(main_base+0x9d6f8))(target,region,(int)bonus,0);
+        focus_burst.target=target;focus_burst.status=status;focus_burst.slot=slot;
+        focus_burst.actor=world.actor;focus_burst.area=byte(target,AREA);
+        focus_burst.id=id;focus_burst.region=region;focus_burst.bonus=bonus;
+        for(unsigned k=0;k<3;++k)w->burst_offset[k]=real(point,k*4)-real(target,0x40+k*4);
         wound_recoil.target=target;wound_recoil.status=status;wound_recoil.area=byte(target,AREA);
         wound_recoil.region=region;wound_recoil.until=world_elapsed+.25f;
 #if ML_WORLD_PRESENTATION
@@ -268,22 +310,29 @@ static void world_wound_markers(void *a,void *camera)
         WMonsterWounds *m=wilds_wounds+i;
         if(!m->target||word(registry,0x1c+4*i)!=(u32)(uptr)m->target||
            word(m->target,0x1428)!=(u32)(uptr)m->status||u16(m->status,0x1b6)!=m->id||
-           (int)word(m->status,0x370)<=0||byte(m->target,AREA)!=byte(a,AREA))continue;
+           byte(m->target,AREA)!=byte(a,AREA))continue;
         for(unsigned j=0;j<WOUND_PARTS&&marker<WOUND_MARKERS;++j){
             WWound *w=m->parts+j;
-            unsigned kind=w->flash>world_elapsed?2:aiming&&w->until>world_elapsed?1:0;
+            unsigned kind=w->flash>world_elapsed?2:
+                aiming&&w->until>world_elapsed&&(int)word(m->status,0x370)>0?1:0;
             if(!kind)continue;
             float p[3],screen[4];
-            if(!world_wound_position(m->target,w,p))continue;
+            if(!world_wound_position(m->target,w,p)){
+                if(kind!=2)continue;
+                for(unsigned k=0;k<3;++k)p[k]=real(m->target,0x40+k*4)+w->burst_offset[k];
+            }
             /* Use the same active viewport projection as the native HUD.
              * It returns a 1280x720 logical position and clip visibility. */
             ((void (*)(float *,const float *,unsigned))(main_base+0x551340))(screen,p,view);
             if(screen[3]>0&&screen[2]>0&&screen[0]>0&&screen[0]<1280&&screen[1]>0&&screen[1]<720){
                 unsigned sx=(unsigned)(screen[0]*(4094.0f/1280));
                 unsigned sy=(unsigned)((720-screen[1])*(4094.0f/720));
-                ml_wilds_wound(marker++,kind<<24|sy<<12|sx);
+                ml_wilds_wound(marker++,kind<<24|sy<<12|sx,kind==2?w->burst_damage:0);
+                if(kind==2&&!w->burst_shown){
+                    w->burst_shown=1;log_event("wilds_wound_popup",w->burst_damage,sx,sy,j);
+                }
             }
         }
     }
-    for(;marker<WOUND_MARKERS;++marker)ml_wilds_wound(marker,0);
+    for(;marker<WOUND_MARKERS;++marker)ml_wilds_wound(marker,0,0);
 }

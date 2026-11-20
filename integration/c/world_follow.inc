@@ -5,10 +5,15 @@
 typedef struct {
     unsigned live,target,uid,area,tier,kind,emitted;
     int bone;float point[3],remaining,age;
+    const void *part_table;void *part;
 } WFollow;
 static WFollow world_follow[56];
 #if ML_WILDS_MOVES
-static unsigned world_release_targets[4],crimson_final_strike;
+static struct {unsigned target,mask;WFollow contact[3];} release_marks[4];
+static unsigned crimson_final_strike;
+static void world_release_contact(void *target,void *part,const float *contact);
+static const void *world_wound_part_table(void *);
+
 #endif
 static unsigned world_helm_tier;
 static unsigned world_helm_count,world_helm_hit_sample;
@@ -32,16 +37,30 @@ static unsigned world_primary_helm(void *attack)
     return world_attack_owned&&(uptr)attack==(uptr)world_attack_actor+0x3020&&
         u16(attack,0x34)==world_attack_id&&(world.move==W_DOWN||world.move==W_LAND);
 }
-static unsigned world_release_shell(void *attack);
+typedef struct {unsigned shell,request,helm_impact,kind;float until,point[3];
+    unsigned attached,target,uid,ordinal;int bone;float local[3];const void *part_table;void *part;} WShellPosition;
+static WShellPosition world_shell_positions[64];
+static const WShellPosition *world_release_shell(void *attack)
+{
+    for(unsigned i=0;i<64;++i){
+        const WShellPosition *p=world_shell_positions+i;
+        if(p->kind==4&&p->shell+0x13a8==(u32)(uptr)attack&&world_elapsed<=p->until&&
+           p->request==word((void *)(uptr)p->shell,0x136c))
+            return p;
+    }
+    return 0;
+}
+
 static void world_monster_damage(void *manager,void *attack,void *target,void *point,
                                  void *v1,void *v2,void *part,void *shape)
 {
 #if ML_WILDS_MOVES
-    unsigned release_shell=world_release_shell(attack);
+    const WShellPosition *release_shell=world_release_shell(attack);
     if(release_shell){
-        log_event("wilds_release_damage_begin",world.actor,release_shell,(u32)(uptr)target,word(attack,0xac));
+        if((u32)(uptr)target!=release_shell->target||world_wound_part_table(target)!=release_shell->part_table)return;
+        part=release_shell->part;
+        log_event("wilds_release_part",release_shell->ordinal,byte(part,8),release_shell->target,(u32)(uptr)part);
         world_original_monster_damage(manager,attack,target,point,v1,v2,part,shape);
-        log_event("wilds_release_damage_end",world.actor,release_shell,(u32)(uptr)target,word(attack,0xac));
         return;
     }
 #endif
@@ -52,6 +71,7 @@ static void world_monster_damage(void *manager,void *attack,void *target,void *p
      * returning to that pass. All other attacks retain their native path. */
 #if ML_WILDS_MOVES
     if(world.move>=W_CHIJIN&&world_attack_owned&&(uptr)attack==(uptr)world_attack_actor+0x3020&&u16(attack,0x34)==world_attack_id){
+        if(world.move==W_RELEASE&&point&&part)world_release_contact(target,part,point);
         log_event("wilds_damage_begin",world.actor,world.source,(u32)(uptr)target,(unsigned)world_hit);
         world_monster_wound_damage(manager,attack,target,point,v1,v2,part,shape);
         log_event("wilds_damage_dispatch",world.actor,world.source,(u32)(uptr)target,(unsigned)world_hit);
@@ -88,19 +108,6 @@ static void world_monster_damage(void *manager,void *attack,void *target,void *p
 static void (*world_original_shell_position)(void *);
 static void *world_monster(unsigned uid);
 static const float *world_bone(void *a,int bone);
-typedef struct {unsigned shell,request,helm_impact,kind;float until,point[3];
-    unsigned attached,target,uid,ordinal;int bone;float local[3];} WShellPosition;
-static WShellPosition world_shell_positions[64];
-static unsigned world_release_shell(void *attack)
-{
-    for(unsigned i=0;i<64;++i){
-        const WShellPosition *p=world_shell_positions+i;
-        if(p->helm_impact==3&&p->shell+0x13a8==(u32)(uptr)attack&&world_elapsed<=p->until&&
-           p->request==word((void *)(uptr)p->shell,0x136c))
-            return p->shell;
-    }
-    return 0;
-}
 #if ML_WILDS_MOVES && ML_WORLD_PRESENTATION
 /* 1 forces the round bank for this contact; 2 excludes a delayed shell. */
 static unsigned world_contact_audio_scope;
@@ -111,7 +118,7 @@ static void world_impact_sound(void *manager,void *target,void *attack,const flo
         (uptr)attack==(uptr)world_attack_actor+0x3020&&u16(attack,0x34)==world_attack_id;
     if(blade)
         log_event("wilds_blade_hitstop",world.actor,world.source,byte(attack,0x57),byte(attack,6));
-    unsigned shell=blade?0:world_release_shell(attack);
+    unsigned shell=!blade&&world_release_shell(attack)!=0;
     /* Use the contact reported by GU, including delayed release hits which
      * may land after the hunter has already started another move. */
     if(point&&world.actor&&(shell||(blade&&wilds_clip(world.source))))
@@ -252,7 +259,7 @@ static void world_follow_clear(void)
 {
     for(unsigned i=0;i<56;++i){world_follow[i].live=0;world_follow[i].remaining=0;}
 #if ML_WILDS_MOVES
-    for(unsigned i=0;i<4;++i)world_release_targets[i]=0;
+    for(unsigned i=0;i<4;++i)release_marks[i].target=0;
 #endif
 #if ML_WORLD_PRESENTATION
     for(unsigned i=0;i<64;++i)world_shell_positions[i].helm_impact=0;
@@ -261,44 +268,58 @@ static void world_follow_clear(void)
     world_helm_count=world_helm_emitted=0;
     for(unsigned i=0;i<10;++i)world_primary_cooldown[i].target=0;
 }
+#if ML_WILDS_MOVES
+static void world_release_contact(void *target,void *part,const float *contact)
+{
+    if(!target||world_hit<158||world_hit>160)return;
+    unsigned stroke=world_hit-158,slot=4;
+    void *data=(void *)(uptr)word(target,0x1428);if(!data)return;
+    unsigned uid=byte(data,0x1b5);
+    if(world_monster(uid)!=target||byte(target,AREA)!=world.epoch)return;
+    for(unsigned i=0;i<4;++i){
+        if(release_marks[i].target==(u32)(uptr)target){slot=i;break;}
+        if(slot==4&&!release_marks[i].target)slot=i;
+    }
+    if(slot==4)return;
+    if(!release_marks[slot].target)release_marks[slot].mask=0;
+    if(release_marks[slot].mask&(1u<<stroke))return;
+    const void *table=world_wound_part_table(target);
+    if(!table||(uptr)part<(uptr)table||((uptr)part-(uptr)table)%44)return;
+    int bone=(int16_t)u16(part,0);if(bone==255)bone=-1;
+    int other=(int16_t)u16(part,2);if(other==255)other=-1;
+    const float *first=world_bone(target,bone),*second=world_bone(target,other);
+    if(first&&second){
+        float d1=0,d2=0;
+        for(unsigned k=0;k<3;++k){float v=contact[k],x=first[12+k]-v,y=second[12+k]-v;d1+=x*x;d2+=y*y;}
+        if(d2<d1)bone=other;
+    }
+    const float *m=world_bone(target,bone);float point[3];
+    if(!m||!world_inverse(m,contact,point))return;
+    release_marks[slot].target=(u32)(uptr)target;
+    release_marks[slot].mask|=1u<<stroke;
+    release_marks[slot].contact[stroke]=(WFollow){.live=1,.target=(u32)(uptr)target,
+        .uid=uid,.area=world.epoch,.tier=3,.kind=4,.bone=bone,.point={point[0],point[1],point[2]},
+        .part_table=table,.part=part};
+    log_event("wilds_release_mark",stroke,byte(part,8),(u32)(uptr)target,(u32)(uptr)part);
+}
+static void world_schedule_release(void *a)
+{
+    if(world.move==W_RELEASE&&real(a,FRAME)<94)return;
+    for(unsigned i=0;i<4;++i){
+        if(!release_marks[i].target)continue;
+        unsigned count=0,strokes[3];
+        for(unsigned n=0;n<3;++n)if(release_marks[i].mask&(1u<<n))strokes[count++]=n;
+        for(unsigned j=0;j<12;++j){
+            WFollow *job=world_follow+8+12*i+j;
+            *job=release_marks[i].contact[strokes[j*count/12]];
+            job->age=world_elapsed;job->emitted=j;job->remaining=.001f+j*.035f;
+        }
+        release_marks[i].target=0;
+    }
+}
+#endif
 static void world_follow_capture(void *a)
 {
-#if ML_WILDS_MOVES
-    if(world.move==W_RELEASE&&world_contact(a)){
-        void *target=(void *)(uptr)word(a,0x30d0),*part=(void *)(uptr)word(a,0x30cc);
-        if(!target||!part)return;
-        void *data=(void *)(uptr)word(target,0x1428);if(!data)return;
-        unsigned uid=byte(data,0x1b5);
-        if(world_monster(uid)!=target||byte(target,AREA)!=world.epoch)return;
-        unsigned slot=4;
-        for(unsigned i=0;i<4;++i){
-            if(world_release_targets[i]==(u32)(uptr)target)return;
-            if(slot==4&&!world_release_targets[i])slot=i;
-        }
-        if(slot==4)return;
-        int bone=(int16_t)u16(part,0);if(bone==255)bone=-1;
-        int other=(int16_t)u16(part,2);if(other==255)other=-1;
-        const float *first=world_bone(target,bone),*second=world_bone(target,other);
-        if(first&&second){
-            float d1=0,d2=0;
-            for(unsigned k=0;k<3;++k){float v=real(a,0x3040+4*k),x=first[12+k]-v,y=second[12+k]-v;d1+=x*x;d2+=y*y;}
-            if(d2<d1)bone=other;
-        }
-        const float *m=world_bone(target,bone);float point[3];
-        if(!m||!world_inverse(m,(const float *)((uptr)a+0x3040),point))return;
-        world_release_targets[slot]=(u32)(uptr)target;
-        /* GU adaptation: twelve independently colliding delayed cuts, anchored
-         * to the first actual contacted part. Never seed from a whiff, and
-         * never cancel an already landed mark when the hunter moves away. */
-        float delay=(80-real(a,FRAME))/60.0f;if(delay<.035f)delay=.035f;
-        for(unsigned j=0;j<12;++j)world_follow[8+slot*12+j]=(WFollow){
-            .live=1,.target=(u32)(uptr)target,.uid=uid,.area=world.epoch,.tier=3,
-            .kind=4,.bone=bone,.point={point[0],point[1],point[2]},
-            .remaining=delay+j*.035f,.age=world_elapsed,.emitted=j};
-        log_event("wilds_release_mark",(u32)(uptr)a,(u32)(uptr)target,(unsigned)bone,12);
-        return;
-    }
-#endif
     unsigned helm=world.move==W_DOWN||world.move==W_LAND;
     if((helm&&world_helm_count>=7)||(!helm&&world.move!=W_BIG)||!world_contact(a))return;
     unsigned counter=world.counter_success||world_counter_seen;
@@ -375,14 +396,16 @@ static u32 wilds_high_blade_query(void *manager,void *attack,void *target)
         (resource,word(attack,0x88)):0;
     unsigned count=group?word(group,4):0,first=word(attack,0x1c);
     if(first>=64||count>64-first)return world_original_monster_query(manager,attack,target);
+    /* Extend release upward while preserving the lower edge of each volume. */
+    float lift=world.move==W_RELEASE?48.f:10.f;
     float saved[64][3];
     for(unsigned i=0;i<count;++i){
         void *v=(void *)((uptr)manager+0x2030+32*(first+i));
         saved[i][0]=real(v,4);saved[i][1]=real(v,12);saved[i][2]=real(v,24);
         unsigned type=byte(v,0);
         if(type<1||type>3)continue;
-        set_real(v,4,saved[i][0]+10);set_real(v,12,saved[i][1]+10);
-        if(type!=1)set_real(v,24,saved[i][2]+10);
+        set_real(v,4,saved[i][0]+lift);set_real(v,12,saved[i][1]+lift);
+        if(type!=1)set_real(v,24,saved[i][2]+lift);
     }
     u32 result=world_original_monster_query(manager,attack,target);
     for(unsigned i=0;i<count;++i){
@@ -395,6 +418,10 @@ static u32 wilds_high_blade_query(void *manager,void *attack,void *target)
 static u32 world_monster_query(void *manager,void *attack,void *target)
 {
     unsigned own=world_attack_owned&&(uptr)attack==(uptr)world_attack_actor+0x3020&&u16(attack,0x34)==world_attack_id;
+#if ML_WILDS_MOVES
+    const WShellPosition *release=own?0:world_release_shell(attack);
+    if(release&&release->target!=(u32)(uptr)target)return 0;
+#endif
     unsigned helm=own&&(world.move==W_DOWN||world.move==W_LAND);
     if(helm){
         if(world_helm_count>=7)return 0;
@@ -435,7 +462,7 @@ static u32 world_monster_query(void *manager,void *attack,void *target)
 #endif
     /* Query returns once per actual target, unlike polling the last-contact
      * field next update. The native pass owns every intersection and callback. */
-    if((helm||world.move==W_BIG||world.move==W_RELEASE)&&own&&byte(attack,0xb4)==1&&
+    if((helm||world.move==W_BIG)&&own&&byte(attack,0xb4)==1&&
        word(attack,0xb0)==(u32)(uptr)target)
         world_follow_capture((void *)(uptr)world.actor);
     return result;
@@ -481,7 +508,7 @@ static unsigned world_burst(void *a,WFollow *job,const float *point)
     for(unsigned i=0;i<64;++i)if(!world_shell_positions[i].shell||world_shell_positions[i].until<world_elapsed){
         world_shell_positions[i]=(WShellPosition){.shell=(u32)(uptr)shell,.request=word(shell,0x136c),.helm_impact=job->kind==1?1:job->kind==4?3:2,.kind=job->kind,
             .until=world_elapsed+(job->kind==4?.2f:.6f),.point={point[0],point[1],point[2]},
-            .attached=job->kind==4,.ordinal=job->emitted,.target=job->target,.uid=job->uid,.bone=job->bone,
+            .part=job->part,.part_table=job->part_table,.attached=job->kind==4,.ordinal=job->emitted,.target=job->target,.uid=job->uid,.bone=job->bone,
             .local={job->point[0],job->point[1],job->point[2]}};break;
     }
     /* Native674404 uses byte7 as started and byte6 as burst count. 255
@@ -514,6 +541,9 @@ static unsigned world_burst(void *a,WFollow *job,const float *point)
 static void world_follow_tick(void *a,float dt)
 {
     world_elapsed+=dt;
+#if ML_WILDS_MOVES
+    world_schedule_release(a);
+#endif
     for(unsigned i=0;i<56;++i){
         WFollow *job=world_follow+i;if(!job->live)continue;
 #if !ML_WILDS_MOVES

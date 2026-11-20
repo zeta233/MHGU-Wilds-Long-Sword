@@ -82,13 +82,14 @@ static const WBladeEdge *crimson_edge(float age)
 }
 static float world_white_anchor[3];
 static unsigned world_white_generation;
+static unsigned world_blade_trail_move(void){return world.move==W_CHIJIN||world.move==W_SLIDE;}
 static void world_white_stroke(void *a,unsigned strike){
     /* All ribbons from a multi-hit clip share one emission origin. */
     if(world_white_generation!=bind_generation||!(world_sfx_seen&(1u<<19))){
         for(unsigned k=0;k<3;++k)world_white_anchor[k]=real(a,0x40+4*k);
         world_white_generation=bind_generation;world_sfx_seen|=1u<<19;
     }
-    if(world.move==W_CHIJIN){
+    if(world_blade_trail_move()){
         for(unsigned uid=0x3fd0;uid<=0x3fd2;++uid)world_sfx_emit(a,world_white_anchor,uid);
         /* The same GU emitter used by the Spirit ground combo, placed on
          * the blade at the start of the damaging sweep (also on a whiff). */
@@ -152,7 +153,7 @@ static int world_poly_update(void *g)
 #endif
     unsigned segment=0;
     while(segment<3&&res!=(u32)(uptr)crimson_ribbons[segment])++segment;
-    unsigned crimson=segment<3&&world.move==W_CHIJIN&&crimson_count&&crimson_generation==bind_generation;
+    unsigned crimson=segment<3&&world_blade_trail_move()&&crimson_count&&crimson_generation==bind_generation;
     if(!white&&!crimson)return live;
     if(!(world_sfx_seen&1024)){world_sfx_seen|=1024;log_event("world_blade_layout",(u32)(uptr)g,word(particle,124),u16(g,212),word(g,52));}
     if(byte(particle,125)!=2)return live;
@@ -230,7 +231,7 @@ static void world_fx_tick(void *a)
     if((world.move==W_GROUND && world.source!=363)||!world_bound||world.actor!=(u32)(uptr)a||world.epoch!=byte(a,AREA)||!world.move||
        (int16_t)u16(a,HP)<=0||u16(a,STATE)!=16||u16(a,MOTION)!=0x500+world.slot)return;
     float frame=real(a,FRAME),point[3];
-    if(world.move==W_CHIJIN){
+    if(world_blade_trail_move()){
         crimson_record_edge(a,frame);
         /* Start the trail during the approach, ahead of each collision. */
         unsigned lead=world.source==907?5:4;

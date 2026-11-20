@@ -22,7 +22,7 @@ typedef struct {
     MLObservation base;
     unsigned state,drawn,alive,grounded,rank,contact,counter,resources_ready;
     unsigned previous_weapon_action;
-    unsigned focus_strike,valor,valor_move;
+    unsigned focus_strike,valor,valor_move,valor_draw_cancel;
     unsigned focus_camera_heading,has_focus_heading;
 } WObservation;
 typedef struct {
@@ -51,7 +51,7 @@ typedef struct {
     unsigned crimson_buffer_heading,crimson_buffer_direction,crimson_buffer_source;
     float wilds_gauge_fraction;
     unsigned wilds_roll_mod,wilds_roll_heading,wilds_r_pending;
-    unsigned wilds_r_direction,wilds_iai_recovered,wilds_focus_break,focus_finisher,iai_focus_locked;
+    unsigned wilds_r_direction,wilds_iai_recovered,wilds_focus_break,iai_focus_locked;
     unsigned iai_follow_keys;
     float iai_follow_wait;
     float wilds_r_wait;
@@ -75,6 +75,22 @@ unsigned w_foresight_stage(unsigned source,const WEvent *event);
 unsigned w_action(unsigned move);
 unsigned w_valor_draw_cancel(unsigned action,unsigned motion);
 unsigned w_valor_chord(unsigned state,unsigned action,unsigned motion,float frame,unsigned held,unsigned focus);
+/* GU's weak Spirit I remains available. Later paid links use these
+ * thresholds both when the controller decides and when GU replays a tap. */
+static inline unsigned w_spirit_link_cost(unsigned action)
+{
+    switch(action){
+    case 18:case 19:case 23:case 24:return 15;
+    case 26:case 27:return 20;
+    case 30:return 25;
+    default:return 0;
+    }
+}
+static inline unsigned w_ordinary_charge_source(unsigned source)
+{
+    return source==101||source==102||source==103||source==105||source==107||
+           source==127||source==128;
+}
 unsigned w_guild_attack(unsigned action);
 unsigned w_guild_source(unsigned state,unsigned action,unsigned motion);
 unsigned w_guild_spirit_opener(unsigned action,unsigned motion,unsigned previous);

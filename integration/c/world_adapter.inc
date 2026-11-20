@@ -125,6 +125,7 @@ static void world_input_trace(void *a,const WObservation *o)
 #endif
 /* Preserve a native solo request until its raw key has matured AND source
  * TIML permits execution. The raw-key clock already ran during recovery. */
+enum { WORLD_R_WAIT_RELEASE=4 }; /* Physical button slots occupy 0..3. */
 static struct {unsigned active,actor,epoch,motion,generation,action,flags,button,owner_action,owner_state;} world_r_gate;
 #include "world_hits.h"
 static unsigned world_bound,world_bound_actor,world_bound_action,world_last_sample;
@@ -667,11 +668,18 @@ static unsigned world_focus_native_input(void *a,unsigned state,unsigned action,
     if(!(raw&PAD_FOCUS))return 0;
     unsigned owner_state=u16(a,STATE),owner_action=u16(a,ACTION);
     unsigned source=w_guild_source(owner_state,owner_action,u16(a,MOTION));
-    if(!(source==1||(source&&real(a,FRAME)>=24))||!world_ready(a))return 0;
+    unsigned valor_style=hunter_style(a)==5;
+    unsigned cut=valor_style&&owner_state==16?w_valor_draw_cancel(owner_action,u16(a,MOTION)):0;
+    unsigned blue=valor_style&&valor_active(a);
+    unsigned allowed=blue?w_valor_chord(owner_state,owner_action,u16(a,MOTION),real(a,FRAME),ML_R|ML_Y,1):
+        cut?real(a,FRAME)>=cut:source==1||(source&&real(a,FRAME)>=24);
+    if(!allowed||!world_ready(a))return 0;
     unsigned spirit=state==16&&((action>=16&&action<=19)||action==23||action==24||
         action==26||action==27||action==30);
     unsigned sheath=state==1&&action==2;
-    if(held==(ML_R|ML_Y))return spirit||sheath;
+    if(held==(ML_R|ML_Y))return spirit||sheath||(blue&&state==16&&
+        (action==116||action==117||action==130||(action>=134&&action<=141)));
+    if(blue&&held==ML_R)return 0;
     unsigned button=held==ML_R&&spirit?PAD_R:held==ML_Y&&sheath?PAD_Y:0;
     if(!button||(!(edge&button)&&focus_lead_time<=0))return 0;
     if(!focus_native.active){
@@ -754,14 +762,12 @@ static float world_motion_speed(void *a,const WEvent *e)
 {
 #if ML_WILDS_MOVES
     /* Fit the full 279 wind-up to the adapted three-second charge clock. */
-    if(world.source==W_FOCUS_FLURRY)return 1.65f;
     if(world.source==908)return world.wilds_stage==3?1.755f:1.35f;
 #endif
     float speed=w_float(world.source,W_FLOAT_SPEED,real(a,FRAME));
     /* Both Iai follow-ups open at frame 80. Retain the authored hold clock. */
     if(world.move==W_SHEATHE&&real(a,FRAME)<80){
-        unsigned quick=((int (*)(void *,int))(main_base+0x2864c4))(a,93);
-        speed*=80.0f/(quick?48.0f:66.0f);
+        speed*=80.0f/48.0f;
     }
     return speed;
 }
@@ -832,15 +838,15 @@ static void wilds_blade_shape(void *a,const WildsClip *clip,float frame)
         put(bank,offset+sphere*48,12u|(12u<<16));
         unsigned crimson=world.move==W_CHIJIN;
         unsigned focus=world.move==W_FOCUS;
-        float radius=world.source==905?28.f+8.f*sphere:focus?24.f+4.f*sphere:crimson?26.f:18.f;
+        float radius=world.source==905?38.f+11.f*sphere:focus?35.f+7.f*sphere:world.move==W_RELEASE?30.f+4.f*sphere:crimson?26.f:18.f;
         set_real(bank,offset+sphere*48+12,radius);
         for(unsigned axis=0;axis<3;++axis){unsigned k=sphere*3+axis;
             float point=x[k]+(y[k]-x[k])*t;
-            if(crimson||focus){
+            if(crimson||focus||world.move==W_RELEASE){
                 /* Keep the inner sphere at the grip. Spread the four blade
-                 * samples from 20..110 to 20..167 along the posed edge. */
+                 * samples from 20..110 to their move-specific reach along the posed edge. */
                 float grip=x[axis]+(y[axis]-x[axis])*t;
-                point+=(point-grip)*(world.source==905?.82f:focus?.35f:57.f/90.f);
+                point+=(point-grip)*(world.source==905?1.13f:focus?.76f:world.move==W_RELEASE?.54f:57.f/90.f);
             }
             set_real(bank,offset+sphere*48+16+axis*4,point);
         }
@@ -886,6 +892,7 @@ static void wilds_hit_tick(void *a)
         wilds_fired=0;wilds_window=~0u;
     }
     float frame=real(a,FRAME);unsigned active=~0u;
+    world_finish_focus_burst(a,frame);
     wilds_blade_shape(a,clip,frame);
     if(world.source==917)wilds_equipment_shape(a);
     for(unsigned i=0;i<sizeof(wilds_strikes)/sizeof(*wilds_strikes);++i){
@@ -907,7 +914,6 @@ static void wilds_hit_tick(void *a)
     unsigned strength=mv>=35?26:mv>=20?20:12;
     crimson_final_strike=world.move==W_CHIJIN&&(active+1==sizeof(wilds_strikes)/sizeof(*wilds_strikes)||
         wilds_strikes[active+1].source!=world.source);
-    if(world.source==W_FOCUS_FLURRY)strength=6;
     if(world.source==904)strength=row==160?34:16;
     if(world.move==W_CHIJIN)strength+=crimson_final_strike?(world.source==907?9:6):3;
     world_blade_hitstop(a,strength);
@@ -933,7 +939,9 @@ static void wilds_hit_tick(void *a)
 static void world_commit(void *a,WDecision d)
 {
 #if ML_WILDS_MOVES
-    if(world.move!=W_FOCUS||!world.wilds_focus_break)world_focus_stagger_release();
+    if(world.move!=W_FOCUS||!world.wilds_focus_break){
+        focus_burst.target=0;world_focus_stagger_release();
+    }
 #endif
     unsigned owned_abort=d.kind==W_ABORT && world_bound && world_bound_actor==(u32)(uptr)a &&
         u16(a,STATE)==16 && u16(a,ACTION)==world_bound_action;
@@ -972,6 +980,16 @@ static void world_commit(void *a,WDecision d)
         log_event("world_spirit_charge",(u32)(uptr)a,gauge_before,word(a,0x2780),world.spirit_paid);
 #endif
     if(d.kind==W_KEEP)return;
+    unsigned native_tap=world_r_gate.active&&world_r_gate.button==WORLD_R_WAIT_RELEASE&&world_r_gate.actor==(u32)(uptr)a&&
+        world_r_gate.epoch==byte(a,AREA)&&world_r_gate.generation==bind_generation&&
+        world_r_gate.owner_state==u16(a,STATE)&&world_r_gate.owner_action==u16(a,ACTION)&&
+        world_r_gate.motion==u16(a,MOTION)&&(d.kind==W_NATIVE||d.kind==W_NATIVE_R);
+    if(native_tap){
+        if(word(a,0x3330)!=3&&word(a,0x2780)<w_spirit_link_cost(world_r_gate.action)){
+            world_r_gate.active=0;return;
+        }
+        d.kind=W_NATIVE;d.native_action=world_r_gate.action;
+    }
     world_idle_actor=0;
     if(d.kind==W_IDLE && world_bound && world_bound_actor==(u32)(uptr)a){
         world_idle_actor=a;world_idle_motion=u16(a,MOTION);world_idle_epoch=byte(a,AREA);
@@ -1012,7 +1030,7 @@ static void world_commit(void *a,WDecision d)
         }
         if(d.move==W_BIG){world_follow[7]=(WFollow){0};world_camera_begin(a);}
 #if ML_WILDS_MOVES
-        if(d.move==W_RELEASE)for(unsigned i=0;i<4;++i)world_release_targets[i]=0;
+        if(d.move==W_RELEASE)for(unsigned i=0;i<4;++i)release_marks[i].target=0;
         if(d.source==918){
             if(world.valor_foresight){
                 unsigned before=word(a,10128);
@@ -1063,7 +1081,7 @@ static void world_commit(void *a,WDecision d)
             log_event("world_chord_solo",(u32)(uptr)a,d.native_action,flags,0);
         }
         put(a,HEADING,d.heading);put(a,TARGET,d.heading);
-        virtual_request(a,16,d.native_action,flags);
+        virtual_request(a,16,d.native_action,native_tap?world_r_gate.flags:flags);
         world_loop_heading(a);
     }else if(d.kind==W_NATIVE_R){
         unsigned current=u16(a,ACTION),previous=u16(a,0x250c),gauge=word(a,0x2780),target=0;
@@ -1234,6 +1252,7 @@ static unsigned valor_draw_cut(void *a)
 }
 static unsigned draw_cut_move(unsigned keys)
 {
+    if(keys==(ML_R|ML_X))return W_THRUST;
     return keys==(ML_R|ML_B)?W_SHEATHE:keys==(ML_R|ML_A)?W_FORESIGHT:0;
 }
 static unsigned valor_spirit_recovery(void *a)
@@ -1254,6 +1273,8 @@ static unsigned valor_link_pose(void *a)
     if((state==1||state==2)&&act<=5)return 1;
     if(state==16&&act==130&&(word(a,10056)&0x400000u))return 4;
     if(valor_spirit_recovery(a))return 2;
+    if(state==16&&act>=86&&!valor_guard_pose(a)&&
+       w_valor_chord(state,act,u16(a,MOTION),real(a,FRAME)+18,ML_R|ML_Y,1))return 6;
     unsigned source=w_guild_source(state,act,u16(a,MOTION));
     return (source==101||source==102||source==103||source==105||source==107)&&
         real(a,FRAME)>=24?3:0;
@@ -1265,13 +1286,13 @@ static void valor_link_collect(void *a,const MLObservation *b,unsigned edge,unsi
     if(valor_link.actor!=a||valor_link.epoch!=byte(a,AREA)||valor_link.owner!=owner){
         valor_link=(__typeof__(valor_link)){.actor=a,.epoch=byte(a,AREA),.owner=owner};
     }
-    if(pose==5&&(edge&0x6200u)&&draw_cut_move(b->held&~ML_Y)){
+    if(pose==5&&(edge&(0x6200u|PAD_X))&&draw_cut_move(b->held&~ML_Y)){
         valor_link.keys=b->held&~ML_Y;valor_link.packet=0;
     }
-    if(pose==2&&valor_follow_input(b->held,edge)){
+    if((pose==2||pose==6)&&valor_follow_input(b->held,edge)){
         valor_link.keys=b->held;valor_link.packet=0;
     }
-    if(pose!=2&&pose!=5&&b->held==ML_R&&(edge&PAD_R)&&b->magnitude>=50&&
+    if(pose!=2&&pose!=5&&pose!=6&&b->held==ML_R&&(edge&PAD_R)&&b->magnitude>=50&&
        (b->gauge>=10||word(a,0x3330)==3||(word(a,10056)&0x400000u))&&!valor_link.moving){
         MLObservation input=observe(a,1);
         valor_link.moving=1;valor_link.elapsed=0;
@@ -1381,6 +1402,9 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
     }
     if(!world.move&&(byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&world_ready(a)){
         unsigned src=w_guild_source(u16(a,STATE),u16(a,ACTION),u16(a,MOTION));
+        if(!valor_active(a)&&state==16&&word(a,0x3330)!=3&&
+           (src==104||src==106||src==108||src==112||w_ordinary_charge_source(src))&&
+           raw.gauge<w_spirit_link_cost(action))return 1;
         unsigned ordinary=src==1||src==101||src==102||src==103||src==105||src==107;
         unsigned window=src==1||(ordinary&&real(a,FRAME)>=24);
         const WEvent *cancel=w_event(src,real(a,FRAME));
@@ -1391,12 +1415,21 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
         /* Keep a leading directional R undecided until the chord grace period
          * has elapsed. Only the core may dispatch its moving opener. */
         unsigned spirit_packet=(action>=16&&action<=19)||action==23||action==24||action==26||action==27||action==30;
-        /* GU can replay the second strike before the directional tap's
-         * execute window opens. Hold that request through R release. */
-        if(state==16&&(action==23||action==24)&&src==104&&
-           world.wilds_r_pending&&world.wilds_r_direction&&
-           (word(a,0x3330)==3||raw.gauge>=15)){
+        /* A queued ordinary Spirit tap belongs to the bridge until release.
+         * GU may request the same successor on that exact update. */
+        if(state==16&&spirit_packet&&world.wilds_r_pending&&
+           (src==104||src==106||src==108)&&!(raw.held&~ML_R)){
             world_r_gate.active=0;return 1;
+        }
+        /* Keep the exact native tap, including fade-slash and insertion
+         * variants, until release distinguishes it from a charge. */
+        if(world_r_gate.active&&world_r_gate.button==WORLD_R_WAIT_RELEASE&&(raw.held&~ML_R))world_r_gate.active=0;
+        if(!valor_active(a)&&state==16&&spirit_packet&&(src==112||w_ordinary_charge_source(src))&&
+           raw.magnitude<50&&raw.held==ML_R&&cancel&&((cancel->input[WI_R.word]>>WI_R.shift)&3)){
+            world_r_gate=(__typeof__(world_r_gate)){.active=1,.actor=(u32)(uptr)a,.epoch=byte(a,AREA),
+                .motion=u16(a,MOTION),.generation=bind_generation,.action=action,.flags=flags,.button=WORLD_R_WAIT_RELEASE,
+                .owner_action=u16(a,ACTION),.owner_state=u16(a,STATE)};
+            return 1;
         }
         if(state==16&&spirit_packet&&raw.held==ML_R&&(src==104||src==106||src==108))return 1;
         if(state==16&&spirit_packet&&window&&raw.magnitude>=50&&raw.held==ML_R)return 1;
@@ -1708,6 +1741,7 @@ static unsigned world_update(void *a,const MLObservation *b)
     unsigned link_pose=o.valor&&!world.move&&o.alive&&o.drawn&&o.grounded&&o.resources_ready?
         valor_link_pose(a):0;
     unsigned draw_cancel=!world.move&&o.alive&&o.grounded&&o.drawn&&o.resources_ready?valor_draw_cut(a):0;
+    o.valor_draw_cancel=draw_cancel;
     if(draw_cancel)link_pose=5;
     if(link_pose){
         valor_link_collect(a,b,edge,link_pose);
@@ -1972,7 +2006,15 @@ static unsigned world_update(void *a,const MLObservation *b)
             u16(a,MOTION)==world_r_gate.motion&&bind_generation==world_r_gate.generation;
 #if ML_WORLD_INPUT_VM
         if(!valid||u16(a,STATE)!=world_r_gate.owner_state||u16(a,ACTION)!=world_r_gate.owner_action)world_r_gate.active=0;
-        else if(!world.controls.buttons[world_r_gate.button].waiting&&!world.gu_chord_wait){
+        else if(world_r_gate.button==WORLD_R_WAIT_RELEASE){
+            if(b->held&~ML_R)world_r_gate.active=0;
+            else if(!(b->held&ML_R)){
+                world_r_gate.active=0;
+                if(o.rank!=3&&b->gauge<w_spirit_link_cost(world_r_gate.action))return 1;
+                ++submitting;virtual_request(a,16,world_r_gate.action,world_r_gate.flags);--submitting;
+                return 1;
+            }
+        }else if(!world.controls.buttons[world_r_gate.button].waiting&&!world.gu_chord_wait){
             unsigned action=world_r_gate.action,flags=world_r_gate.flags;world_r_gate.active=0;
             ++submitting;virtual_request(a,16,action,flags);--submitting;
             return 1;
@@ -2032,7 +2074,6 @@ static unsigned world_install(void)
         {0xbac204,0xe92d4ff0u,0xe24dd014u},
         {0x657338,0xe92d4bf0u,0xe1a04000u},
         {0x9a828,0xe92d48f0u,0xe24dd008u},
-        {0x76154,0xe92d4ff0u,0xe24dd014u},
         {0x2807a0,0xe30114a4u,0xe7902001u},
 #endif
         {0x2a309c,0xe92d4070u,0xe1a04000u},
@@ -2089,9 +2130,14 @@ static unsigned world_install(void)
     forge_hook_create((void *)(main_base+0xbac204),(void *)world_pad_map,(void **)&world_original_pad_map);
     forge_hook_create((void *)(main_base+0x657338),(void *)world_target_panel,(void **)&world_original_target_panel);
     forge_hook_create((void *)(main_base+0x9a828),(void *)world_monster_reaction,(void **)&world_original_monster_reaction);
-    forge_hook_create((void *)(main_base+0x76154),(void *)world_monster_action,(void **)&world_original_monster_action);
+    /* Only the extended wound stagger uses this entry. A monster port may own it. */
+    const u32 *action_entry=(const u32 *)(main_base+0x76154);
+    if(action_entry[0]==0xe92d4ff0u&&action_entry[1]==0xe24dd014u)
+        forge_hook_create((void *)action_entry,(void *)world_monster_action,(void **)&world_original_monster_action);
+    if(!world_original_monster_action)
+        log_event("wilds_focus_stagger_unavailable",0x76154,action_entry[0],action_entry[1],0);
     forge_hook_create((void *)(main_base+0x2807a0),(void *)world_focus_turn,(void **)&world_original_turn);
-    if(!world_original_pad_map||!world_original_target_panel||!world_original_monster_reaction||!world_original_monster_action||!world_original_turn)return 0;
+    if(!world_original_pad_map||!world_original_target_panel||!world_original_monster_reaction||!world_original_turn)return 0;
 #endif
     return world_original_gauge_gain&&world_original_spirit_hud&&world_original_flinch_resist&&world_original_damage&&world_original_hp&&world_original_floor&&world_original_attack_scale&&world_original_timers&&world_original_player_query&&world_original_monster_query&&world_original_monster_damage&&world_original_shell_position&&world_original_attack_shapes&&world_original_camera;
 }

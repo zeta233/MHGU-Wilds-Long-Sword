@@ -141,7 +141,13 @@ unsigned w_guild_source(unsigned state,unsigned action,unsigned motion)
 unsigned w_valor_draw_cancel(unsigned action,unsigned motion)
 {
     static const unsigned char cuts[][3]={
-        {86,190,32},{86,184,22},{87,130,38},{99,103,38},{100,129,50},{101,128,50}
+        {86,190,32},{86,184,22},{87,130,38},{99,103,38},{100,129,50},{101,128,50},
+        /* Native fade-slash variants share their striking clips. Wait for
+         * the strike itself; several actions first bind a movement clip. */
+        {93,103,38},{94,103,38},{95,129,50},{96,129,50},{97,128,50},{98,128,50},
+        {110,103,38},{111,129,50},{112,128,50},{113,103,38},{114,129,50},{115,128,50},
+        {120,103,38},{121,103,38},{122,103,38},{123,129,50},{124,129,50},{125,129,50},
+        {126,128,50},{127,128,50},{128,128,50}
     };
     for(unsigned i=0;i<sizeof(cuts)/sizeof(cuts[0]);++i)
         if(action==cuts[i][0]&&motion==0x500u+cuts[i][1])return cuts[i][2];
@@ -160,9 +166,9 @@ unsigned w_valor_chord(unsigned state,unsigned action,unsigned motion,float fram
        ((action==130&&motion==0x5c0)||((action==16||action==17)&&motion==0x568)||
         (action<=3&&(motion==0x565||motion==0x566))))return move;
     unsigned draw_cancel=w_valor_draw_cancel(action,motion);
-    if(action!=86&&draw_cancel)return frame>=draw_cancel?move:0;
+    if(draw_cancel)return frame>=draw_cancel?move:0;
     static const unsigned char recovery[][3]={
-        {104,106,38},{23,106,44},{24,106,44},{95,129,50},
+        {104,106,38},{23,106,44},{24,106,44},{105,108,95},{119,107,38},
         {102,130,46},{103,131,46},{108,131,46},{109,131,46},{22,105,38},
         {118,105,38},{143,103,76},{144,103,76},{130,192,44},{130,104,62},
         {116,191,34},{116,185,22},{117,186,110},{134,190,32},{134,184,22},
@@ -386,11 +392,11 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
         s->source=delta>=8192&&delta<=24576?911:delta<=-8192&&delta>=-24576?910:delta>24576||delta< -24576?912:903;
     }
     s->wilds_tier=1;s->wilds_elapsed=s->wilds_buffer=s->wilds_roll_buffer=s->wilds_r_wait=0;s->wilds_r_pending=0;
-    s->wilds_gauge_fraction=0;
+    s->wilds_gauge_fraction=0;s->wilds_bridge_hold=0;
     s->wilds_previous=o->base.held;s->wilds_sample=o->base.sample_sequence;
     s->slot=w_clip(s->source)->slot;s->bound=0;s->last_frame=0;
     s->counter_success=s->hit_success=s->rank_paid=s->follow_ready=0;
-    s->wilds_iai_recovered=s->wilds_focus_break=s->focus_finisher=s->iai_focus_locked=0;
+    s->wilds_iai_recovered=s->wilds_focus_break=s->iai_focus_locked=0;
     s->iai_follow_keys=0;s->iai_follow_wait=0;
     s->hold_seconds=0;s->consumed|=mask;s->queued=0;
     s->ground_node=s->main_source=0;s->entry_start=0;

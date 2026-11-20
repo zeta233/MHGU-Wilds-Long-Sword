@@ -109,6 +109,9 @@ static WDecision world_route(WState *s,const WObservation *o,unsigned edge)
     case 23:action=22;break;
     default:return (WDecision){0};
     }
+#if ML_WILDS_MOVES
+    if(!spirit_available(o,w_spirit_link_cost(action)))return (WDecision){0};
+#endif
     WDecision d=w_leave(s);d.kind=W_NATIVE;d.native_action=action;d.heading=o->base.heading;
     return d;
 }
@@ -161,13 +164,11 @@ static WDecision wilds_iai_follow(WState *s,const WObservation *o)
         return (WDecision){0};
     }
     if(!s->counter_success){
-        if(held!=ML_R)s->iai_follow_keys=0;
-        else if(edge&ML_R){
-            s->iai_follow_keys=ML_R;
-            s->iai_follow_wait=.6f;
-        }
-        /* The R that started Iai stays consumed until it is released. */
-        if(frame>=37&&s->iai_follow_keys==ML_R&&s->iai_follow_wait<=0)
+        /* The opener consumes R for single-button commands, but a sustained
+         * physical hold is an explicit charge gesture. A fresh R in recovery
+         * needs only the tap discrimination interval. */
+        float threshold=(s->consumed&ML_R)?.60f:.25f;
+        if(frame>=37&&b->held==ML_R&&s->wilds_bridge_hold>=threshold)
             return wilds_charge(s,o,2);
         return (WDecision){0};
     }
@@ -185,9 +186,14 @@ static WDecision wilds_iai_follow(WState *s,const WObservation *o)
     if(s->rank_paid&&o->rank==s->rank&&o->rank<3){
         next.rank=o->rank+1;if(next.rank==3)next.base.gauge=100;
     }
+    if(frame>=70&&b->held==ML_R&&s->wilds_bridge_hold>=.60f)return wilds_charge(s,&next,3);
     if(s->iai_follow_keys==(ML_R|ML_B))return enter(s,&next,W_SHEATHE,ML_R|ML_B);
     if(held==ML_X&&next.rank==3)return w_wilds_enter(s,&next,W_CHIJIN);
     if(s->iai_follow_keys==ML_R&&s->iai_follow_wait<=0){
+        if(held==ML_R){
+            if(frame>=70&&s->iai_follow_wait<=-.50f)return wilds_charge(s,&next,3);
+            return (WDecision){0};
+        }
         return wilds_native(s,&next,spirit_available(&next,20)?26:27);
     }
     return (WDecision){0};
@@ -203,6 +209,10 @@ static unsigned wilds_focus_window(const WState *s,const WObservation *o)
         return clip&&frame>=clip->cancel;
     }
     if(s->move)return 0;
+    if(!o->grounded)return 0;
+    if(o->valor_draw_cancel)return frame>=o->valor_draw_cancel;
+    if(o->valor)return w_valor_chord(o->state,o->base.native_action,o->base.motion,
+                                      frame,ML_R|ML_Y,1)==W_FOCUS;
     unsigned source=w_guild_source(o->state,o->base.native_action,o->base.motion);
     return source==1||(source&&frame>=24);
 }
@@ -215,21 +225,26 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
         if(b->held==(ML_R|ML_X))return enter(s,o,W_THRUST,b->held);
         if(o->valor&&b->held==(ML_X|ML_A))return wilds_native(s,o,wilds_fade_action(o));
     }
-    if(!o->valor&&!s->move&&o->valor_move)return enter(s,o,o->valor_move,ML_R|(o->valor_move==W_SHEATHE?ML_B:ML_A));
+    if(o->focus_strike&&wilds_focus_window(s,o)){
+        WDecision focus=w_wilds_enter(s,o,W_FOCUS);
+        if(focus.kind==W_ENTER){s->consumed|=ML_R|ML_Y;return focus;}
+    }
+    if(!o->valor&&!s->move&&o->valor_move){
+        unsigned partner=o->valor_move==W_THRUST?ML_X:o->valor_move==W_SHEATHE?ML_B:ML_A;
+        return enter(s,o,o->valor_move,ML_R|partner);
+    }
     if(o->valor&&!s->move){
         if(!o->grounded||!o->valor_move)return (WDecision){0};
         if(o->valor_move==W_FOCUS||o->valor_move==W_SLIDE||o->valor_move==W_CHIJIN)return w_wilds_enter(s,o,o->valor_move);
         return enter(s,o,o->valor_move,b->held);
-    }
-    if(o->focus_strike&&wilds_focus_window(s,o)){
-        WDecision focus=w_wilds_enter(s,o,W_FOCUS);
-        if(focus.kind==W_ENTER){s->consumed|=ML_R|ML_Y;return focus;}
     }
     if(s->red_foresight_chain&&s->source==109)return wilds_red_round_step(s,o);
     if(s->move>=W_CHIJIN||s->source==918)return wilds_step(s,o);
     unsigned bridge_source=s->move?s->source:w_guild_source(o->state,b->native_action,b->motion);
     WDecision bridge=wilds_bridge(s,o,bridge_source);
     if(bridge.kind!=W_KEEP)return bridge;
+    if(s->wilds_r_pending&&b->held==ML_R&&
+       ((s->move==W_SMALL)||(!s->move&&(bridge_source==112||w_ordinary_charge_source(bridge_source))&&b->magnitude<50)))return (WDecision){0};
 #endif
     unsigned idle=!s->move&&(o->state==1||o->state==2)&&b->native_action<=5&&o->grounded;
     unsigned air_spirit=!s->move&&o->state==16&&
@@ -305,6 +320,7 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
         if(follow.kind!=W_KEEP)return follow;
         /* The command graph can otherwise dispatch a single button while
          * its partner is still within the chord window. */
+        if(s->move==W_BIG&&b->held==ML_R&&!b->motion_finished)return (WDecision){0};
         if((s->move==W_SMALL||s->counter_success)&&s->iai_follow_keys&&s->iai_follow_wait>0)
             return (WDecision){0};
     }

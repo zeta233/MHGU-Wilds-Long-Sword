@@ -1,6 +1,6 @@
 //! Clean host shim: no legacy controller, private motion data or hit rewrites.
 #![no_std]
-use core::sync::atomic::{AtomicU32,Ordering};
+use core::sync::atomic::{AtomicU32,AtomicU64,Ordering};
 use forge::log::prelude::*;
 static BASE:AtomicU32=AtomicU32::new(0);
 unsafe extern "C" {fn ml_install(base:u32)->u32;fn ml_pad_refresh();}
@@ -42,7 +42,7 @@ static WILDS_CHARGE: AtomicU32 = AtomicU32::new(0);
 #[cfg(ml_world_combat)]
 static WILDS_FOCUS: AtomicU32 = AtomicU32::new(0);
 #[cfg(ml_world_combat)]
-static WILDS_WOUNDS: [AtomicU32; 12] = [const { AtomicU32::new(0) }; 12];
+static WILDS_WOUNDS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
 #[cfg(ml_world_combat)]
 static WILDS_LOCK_HINT: AtomicU32 = AtomicU32::new(0);
 #[cfg(ml_world_combat)]
@@ -57,9 +57,9 @@ extern "C" fn ml_wilds_focus(value: u32) {
 
 #[cfg(ml_world_combat)]
 #[unsafe(no_mangle)]
-extern "C" fn ml_wilds_wound(slot: u32, value: u32) {
+extern "C" fn ml_wilds_wound(slot: u32, value: u32, damage: u32) {
     if let Some(marker) = WILDS_WOUNDS.get(slot as usize) {
-        marker.store(value, Ordering::Relaxed);
+        marker.store(((damage as u64) << 32) | value as u64, Ordering::Relaxed);
     }
 }
 
@@ -96,12 +96,28 @@ fn draw_gauge_glow() {
         if wound == 0 { continue; }
         let x = ((wound & 4095) as f32 / 4094.0) * size.x;
         let y = (1.0 - ((wound >> 12) & 4095) as f32 / 4094.0) * size.y;
-        let broken = wound >> 24 == 2;
+        let kind = (wound as u32) >> 24;
+        let broken = kind >= 2;
         let radius = if broken { 20.0 } else { 13.0 };
         let center = ImVec2::new(x, y);
         let (r, g, b) = if broken { (255, 185, 78) } else { (207, 42, 25) };
         for (size, opacity) in [(1.0, 7), (0.83, 10), (0.66, 13), (0.5, 16), (0.34, 19)] {
             dl.add_circle_filled(center, radius * size * scale, color(r, g, b, opacity), 20);
+        }
+        let mut amount = (wound >> 32) as u32;
+        if broken && amount > 0 {
+            let mut digits = [b'0'; 10];
+            let mut start = digits.len();
+            while amount > 0 {
+                start -= 1;
+                digits[start] += (amount % 10) as u8;
+                amount /= 10;
+            }
+            if let Ok(label) = core::str::from_utf8(&digits[start..]) {
+                let pos = ImVec2::new(x + 6.0 * scale, y - 20.0 * scale);
+                dl.add_text(ImVec2::new(pos.x + scale, pos.y + scale), color(32, 14, 6, 255), label);
+                dl.add_text(pos, color(255, 208, 99, 255), label);
+            }
         }
     }
     if lock_hint != 0 {
