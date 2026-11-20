@@ -45,7 +45,7 @@ def decode_wav(raw):
    decoded.append(value);h2=h1;h1=value
  return np.asarray(decoded[:n],dtype=float)
 
-def mix_personal(data,target):
+def mix_personal(data,target,peak=.9):
  # Use the louder 20 ms windows: the source files have dissimilar tails
  # and adding gain by whole-file RMS made quiet blade transients inconsistent.
  blocks=np.pad(data,(0,(-len(data))%960)).reshape(-1,960)/32768
@@ -54,8 +54,8 @@ def mix_personal(data,target):
  gain=max(1.,min(10**(27/20),target/active))
  shaped=data/32768*gain
  # Smooth only the amplified peaks while reserving mixer headroom.
- knee=.62
- shaped=np.where(np.abs(shaped)>knee,np.sign(shaped)*(knee+.28*np.tanh((np.abs(shaped)-knee)/.28)),shaped)
+ knee=.62;headroom=peak-knee
+ shaped=np.where(np.abs(shaped)>knee,np.sign(shaped)*(knee+headroom*np.tanh((np.abs(shaped)-knee)/headroom)),shaped)
  return np.round(shaped*32767).astype(np.int16),float(20*np.log10(gain))
 
 def build(work,out):
@@ -76,14 +76,16 @@ def build(work,out):
  request_rows=bytearray(req[52:52+54*132]);template=request_rows[6*132:7*132]
  assert template[14]==6
  original_wave=entries[0].data();events={};report=[];local={}
- def append_wave(name,data,donor,request_row,target):
+ pcm_sources={}
+ def append_wave(name,data,donor,request_row,target,peak=.9):
   nonlocal bank, request_rows
   if target is None:
    samples,gain=np.rint(data).astype(np.int16),0.
   else:
-   samples,gain=mix_personal(data,target)
+   samples,gain=mix_personal(data,target,peak)
   payload,coeff,snr=encode(samples,dll);n=len(samples)
   index=len(entries)-2;request=len(request_rows)//132
+  pcm_sources[request]=(data,donor,request_row)
   wave_header=bytearray(original_wave[:120]);struct.pack_into('<I',wave_header,8,len(payload)-1)
   struct.pack_into('<f',wave_header,12,n/48000);struct.pack_into('<16h',wave_header,24,*coeff)
   struct.pack_into('<6I',wave_header,96,n,48000,0,0,n-1,0)
@@ -227,9 +229,38 @@ def build(work,out):
   row=append_wave(rf'sound\se\pl\wp\swo\world\wav\{label}',pcm,rows[6],template,None)
   confirmations[label]=row['request']
   report.append(dict(phase=label,level_db=level_db,source_info=source_info,**row))
+ # Exact source clips and matched contact envelopes from Wilds' weapon bank.
+ contact_dir=work/'native-hit-wav'
+ contact_sources=json.loads((contact_dir/'source-events.json').read_text(encoding='utf8'))
+ contact={}
+ for label,source_info in contact_sources.items():
+  data=event_samples(contact_dir/f'{label}.wav')
+  db={'thrust_charge':-4.,'thrust_cut':3.}.get(label,0.)
+  result=append_wave(rf'sound\se\pl\wp\swo\world\wav\wilds_{label}',levelled(data,db),rows[6],template,None)
+  contact[label]=result['request']
+  report.append(dict(phase=label,bank_level_db=db,source_info=source_info,**result))
  for speed in range(3):
   for variant in range(4):
    if not swing_ids[speed][variant]:report.append(add_swing(f'wind_{speed}_{variant}',speed,variant))
+ # These moves run over GU's combat mix. Keep their original samples and
+ # timing, but match active loudness to clearly audible weapon effects.
+ def louder(request,label,db):
+  data,donor,row=pcm_sources[request]
+  sample=append_wave(rf'sound\se\pl\wp\swo\world\wav\loud_{label}',data,donor,row,10**(db/20),peak=.84)
+  report.append(dict(phase=label,source_request=request,target_active_dbfs=db,**sample))
+  return sample['request']
+ release_speed_swings=[[louder(request,f'rel_wind{s}_{v}',-14)
+                         for v,request in enumerate(group)] for s,group in enumerate(swing_ids)]
+ blade_loud=[louder(request,f'blade{i}',-13) for i,request in enumerate(blade_impacts)]
+ follow_requests['helm']=[louder(request,f'helm_blade{i}',-13)
+                          for i,request in enumerate(follow_requests['helm'])]
+ for label,request in list(contact.items()):
+  target=-16 if label=='thrust_charge' else -14 if label=='thrust_cut' else -12
+  contact[label]=louder(request,label,target)
+ helm_levels={1900417456:-16,2000639191:-17,3748751524:-14,962180282:-20}
+ helm_loud={event:louder(events[event],f'helm_{event}',db) for event,db in helm_levels.items()}
+ release_loud={request:louder(request,f'rel_{request}',-16) for request in release_native.values()}
+ release_loud[sheath['request']]=louder(sheath['request'],'rel_sheath',-19)
  count=len(report);struct.pack_into('<I',bank,12,48+count)
 
  # Native sSoundBank bounds its group using a second packed 10-bit count.
@@ -269,6 +300,7 @@ def build(work,out):
   if c['source']==904:
    if event==1617378905:continue  # The release table already plays this cue.
    request=release_native.get(event,request)
+  if c['source']==904:request=release_loud.get(request,request)
   cues.append((c['source'],frame,request))
   if c['source']==901:
    # Keep the existing opener's gear and spirit layers on the other variants.
@@ -287,25 +319,32 @@ def build(work,out):
  for source,effect in ((922,40),(923,49),(924,53),(925,52)):
   cues.append((source,effect,events[286588833 if source==922 else 4027867090]))
  cues.append((925,39,events[1720684994]))
- cues.extend((904,item['frame'],item['request']) for item in release)
+ cues.extend((904,item['frame'],release_loud.get(item['request'],item['request'])) for item in release)
  assert len(cues)==len(set(cues))<=128
  text='#pragma once\n/* Wilds sound requests and ported motion trigger frames. */\n'
  text+=f'#define WILDS_AUDIO_RESOURCE_COUNT {50+count}u\n#define WILDS_AUDIO_REQUEST_COUNT {54+count}u\n'
  text+='static const unsigned wilds_speed_swings[3][4]={'+','.join('{'+','.join(map(str,row))+'}' for row in swing_ids)+'};\n'
+ text+='static const unsigned wilds_release_speed_swings[3][4]={'+','.join('{'+','.join(map(str,row))+'}' for row in release_speed_swings)+'};\n'
+ text+='static const unsigned wilds_combat_blade_impact_requests[3]={'+','.join(map(str,blade_loud))+'};\n'
  text+='static const unsigned wilds_swing_requests[]={'+','.join(map(str,swings))+'};\n'
  text+='static const unsigned wilds_release_impact_requests[]={'+','.join(map(str,release_impacts))+'};\n'
  text+='static const unsigned wilds_release_blade_impact_requests[]={'+','.join(map(str,blade_impacts))+'};\n'
  for name,event in dict(SHEATH=1617378905,DRAW=2550263896,HANDLING=1500054012,
-                        SPIRIT=4027867090,COUNTER=1387136258,HELM=1900417456,
+                        SPIRIT=4027867090,COUNTER=1387136258,
                         EQUIPMENT=3638200284).items():
   text+=f'#define WILDS_SOUND_{name} {events[event]}u\n'
  for move,requests in follow_requests.items():
   text+=f'static const unsigned wilds_{move}_impact_requests[3]={{'+','.join(map(str,requests))+'};\n'
- for name,event in dict(HELM_JUMP=2000639191,HELM_CUT=3748751524,
+ for name,event in dict(HELM=1900417456,HELM_JUMP=2000639191,HELM_CUT=3748751524,
                         HELM_LAND_GEAR=962180282,IAI_CUT=1387136258,IAI_RECOVERY=1720684994).items():
-  text+=f'#define WILDS_SOUND_{name} {release_native[event] if name=="IAI_CUT" else events[event]}u\n'
+  text+=f'#define WILDS_SOUND_{name} {release_native[event] if name=="IAI_CUT" else helm_loud.get(event,events[event])}u\n'
  for label,request in confirmations.items():
   text+=f'#define WILDS_SOUND_{label.upper()} {request}u\n'
+ for label in ('thrust_charge','thrust_cut'):
+  text+=f'#define WILDS_SOUND_{label.upper()} {contact[label]}u\n'
+ for group in ('body','shell'):
+  ids=','.join(str(contact[f'{group}{i}']) for i in range(3))
+  text+=f'static const unsigned wilds_{group}_impact_requests[3]={{{ids}}};\n'
  text+=f'#define WILDS_SOUND_IAI_WHOOSH {swings[2]}u\n'
  text+='typedef struct {unsigned source;float frame;unsigned request;} WildsAudioCue;\nstatic const WildsAudioCue wilds_audio_cues[]={\n'
  text+=''.join(f'{{{s},{f:.6f}f,{r}}},\n' for s,f,r in sorted(cues))+'};\n'

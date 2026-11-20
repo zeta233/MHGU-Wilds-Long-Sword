@@ -1,12 +1,14 @@
 """Validate the combat package against original ARC data and native key clocks."""
 from portkit import *
 from combat_rules import MOVES
+from build_charge_walk import STAND_SLOT, WALK_SLOT
 import sys
 out=Path(sys.argv[1]);base=Path(sys.argv[2]) if len(sys.argv)>2 else BASE_ARC;_,old=read_arc(base);_,new=read_arc(out/'combat.arc')
 a={x.name:x.data() for x in old};b={x.name:x.data() for x in new}
 lmt=Lmt(b[ANIM_ENTRY]);report=[]
 for label,node,slot,source,template,cancel,recovery in MOVES:
  frames,tracks=lmt.tracks(slot)
+ if slot==WALK_SLOT:assert frames==lmt.tracks(STAND_SLOT)[0]
  for track in tracks:
   if track.codec==3:
    keys=[unpack('3fI',track.data,i) for i in range(0,len(track.data),16)]
@@ -21,6 +23,7 @@ for label,node,slot,source,template,cancel,recovery in MOVES:
  report.append(dict(label=label,frames=frames,root_start=first[:3],root_end=last[:3]))
 old_lmt=Lmt(a[ANIM_ENTRY]);changed={x[2] for x in MOVES if not unpack('I',old_lmt.data,8+x[2]*4)[0]}
 for slot in range(old_lmt.count):
+ if slot==WALK_SLOT:continue
  if slot in changed:assert not unpack('I',a[ANIM_ENTRY],8+slot*4)[0],slot
  else:assert a[ANIM_ENTRY][8+slot*4:12+slot*4]==b[ANIM_ENTRY][8+slot*4:12+slot*4]
 for name in a:

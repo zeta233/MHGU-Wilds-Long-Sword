@@ -68,6 +68,63 @@ static void valor_routes(void)
  }
 }
 
+static void red_x_recovery(void)
+{
+ const unsigned native[][3]={
+  {16,104,56},{17,104,56},{4,105,24},{25,107,24},{22,105,38},
+  {23,106,44},{26,108,24},{99,103,38},{130,192,44},{143,103,76},
+ };
+ for(unsigned i=0;i<sizeof(native)/sizeof(*native);i++){
+  for(unsigned overlap=0;overlap<=(i<2);overlap++){
+   WObservation o=obs();
+   WState s={.spirit_crimson_held=overlap?ML_R:0};
+   o.base.native_action=native[i][0];o.base.motion=0x500+native[i][1];
+   o.base.held=overlap?(ML_R|ML_X):ML_X;o.base.animation_frame=3;
+   assert(world_command_step(&s,&o,0,NULL).kind==W_KEEP);
+   o.base.held=0;o.base.animation_frame=native[i][2]-1;
+   o.base.simulation_delta=5;o.base.sample_sequence++;
+   assert(world_command_step(&s,&o,0,NULL).kind==W_KEEP);
+   o.base.animation_frame++;o.base.sample_sequence++;
+   WDecision d=world_command_step(&s,&o,0,NULL);
+   assert(d.kind==W_ENTER&&d.source==W_CRIMSON_STATIONARY);
+  }
+ }
+ /* GU sends the X thrust request at F55.5 even when the pad is
+  * already neutral. Preserve its steering snapshot until F56. */
+ WObservation reserve=obs();WState buffered={0};
+ reserve.base.native_action=16;reserve.base.motion=0x568;reserve.base.animation_frame=55.5f;
+ w_reserve_spirit_crimson(&buffered,&reserve.base);
+ assert(world_command_step(&buffered,&reserve,0,NULL).kind==W_KEEP);
+ reserve.base.animation_frame=56;reserve.base.sample_sequence++;
+ assert(world_command_step(&buffered,&reserve,0,NULL).source==W_CRIMSON_STATIONARY);
+
+ reserve=obs();buffered=(WState){0};
+ reserve.base.native_action=16;reserve.base.motion=0x501;
+ reserve.base.held=ML_X;
+ assert(world_command_step(&buffered,&reserve,0,NULL).kind==W_KEEP);
+ reserve.base.held=0;reserve.base.motion=0x568;
+ reserve.base.animation_frame=56;reserve.base.sample_sequence++;
+ assert(world_command_step(&buffered,&reserve,0,NULL).source==W_CRIMSON_STATIONARY);
+ const unsigned custom[][2]={
+  {W_SLIDE,903},{W_SLIDE,W_SPIRIT_TWO_FORWARD},{W_CHARGE,902},
+  {W_FOCUS,905},{W_FOCUS,914},{W_FORESIGHT,918},
+ };
+ for(unsigned i=0;i<sizeof(custom)/sizeof(*custom);i++){
+  WObservation o=obs();WState s={.move=custom[i][0],.source=custom[i][1]};
+  unsigned frame=wilds_clip(s.source)->cancel;
+  assert(tick(&s,&o,ML_X,frame-20).kind==W_KEEP);
+  assert(tick(&s,&o,0,frame-1).kind==W_KEEP);
+  assert(tick(&s,&o,0,frame).source==W_CRIMSON_STATIONARY);
+ }
+ WObservation o=obs();
+ WState s={.move=W_CHIJIN,.source=W_CRIMSON_STATIONARY,.spirit_crimson_repeat=1};
+ o.base.held=ML_R|ML_X;o.base.animation_frame=4;
+ assert(world_command_step(&s,&o,s.source,w_event(s.source,4)).kind==W_KEEP);
+ o=obs();s=(WState){0};o.base.native_action=16;o.base.motion=0x568;
+ o.valor=1;o.base.held=ML_R|ML_X;o.base.animation_frame=3;o.valor_move=W_THRUST;
+ assert(world_command_step(&s,&o,0,NULL).move==W_THRUST);
+}
+
 static void charge_routes(void)
 {
  const unsigned sources[]={901,920,921,906,907,903,910,911,912,922,923,924,925,902,914,927,928,929,930};
@@ -116,6 +173,7 @@ static void short_spirit_costs(void)
 }
 int main(void){
  valor_routes();
+ red_x_recovery();
  charge_routes();
  short_spirit_costs();
  iai_held_entry();

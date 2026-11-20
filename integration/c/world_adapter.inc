@@ -278,7 +278,8 @@ static u32 world_flinch_resist(void *a)
 static void world_audio_epv(void *,unsigned,const float *);
 static void world_audio_blade(void *,const float *);
 #if ML_WILDS_MOVES
-enum WAudioImpact { W_SOUND_CRIMSON_FINISH,W_SOUND_BLADE,W_SOUND_RELEASE_BLADE,W_SOUND_RELEASE_FOLLOW,W_SOUND_HELM_FOLLOW,W_SOUND_IAI_FOLLOW };
+enum WAudioImpact { W_SOUND_CRIMSON_FINISH,W_SOUND_BLADE,W_SOUND_THRUST_BLADE,W_SOUND_HELM_BLADE,
+    W_SOUND_RELEASE_BLADE,W_SOUND_RELEASE_FOLLOW,W_SOUND_HELM_FOLLOW,W_SOUND_IAI_FOLLOW };
 static unsigned world_audio_impact(unsigned,enum WAudioImpact,unsigned,const float *);
 static unsigned world_helm_wind_played;
 #else
@@ -824,8 +825,9 @@ static void world_cleanup(void *a)
 static float world_motion_speed(void *a,const WEvent *e)
 {
 #if ML_WILDS_MOVES
-    /* Fit the full 279 wind-up to the adapted three-second charge clock. */
-    if(world.source==908)return world.wilds_stage==3?1.755f:1.35f;
+    /* MOT279 settles into its release stance at frame 180. */
+    if(world.source==908||world.source==915)
+        return (W_CHARGE_READY_FRAME/(60.f*W_CHARGE_READY_SECONDS))*w_charge_rate(&world);
 #endif
     float speed=w_float(world.source,W_FLOAT_SPEED,real(a,FRAME));
     /* Both Iai follow-ups open at frame 80. Retain the authored hold clock. */
@@ -1081,9 +1083,11 @@ static void world_commit(void *a,WDecision d)
 #endif
 #if ML_WORLD_PRESENTATION && WORLD_AUDIO_GROUND
         const float *point=(const float *)((uptr)a+0x40);
-        if(
-           (d.move==W_FORESIGHT && world.foresight_gauge) || (d.move==W_THRUST && world.rank))
+        if(d.move==W_FORESIGHT&&world.foresight_gauge)
             world_audio_epv(a,25505,point);
+#if !ML_WILDS_MOVES
+        if(d.move==W_THRUST&&world.rank)world_audio_epv(a,25505,point);
+#endif
 #if ML_WILDS_MOVES
         if(d.move==W_RISE)world_helm_wind_played=0;
 #else
@@ -1138,9 +1142,10 @@ static void world_commit(void *a,WDecision d)
         put(a,HEADING,d.heading);put(a,TARGET,d.heading);
         if(d.kind==W_ENTER){
 #if ML_WILDS_MOVES
-            if(d.move==W_CHIJIN&&!(byte(a,DRAWN)&1)){
+            if((d.move==W_CHIJIN||d.move==W_SLIDE)&&!(byte(a,DRAWN)&1)){
                 ((void (*)(void *,unsigned))(main_base+0x2a2560))(a,1);
-                log_event("wilds_red_draw",(u32)(uptr)a,u16(a,STATE),u16(a,ACTION),byte(a,DRAWN));
+                log_event(d.move==W_SLIDE?"wilds_slide_draw":"wilds_red_draw",
+                    (u32)(uptr)a,u16(a,STATE),u16(a,ACTION),byte(a,DRAWN));
             }
 #endif
             virtual_request(a,16,w_action(d.move),0);
@@ -1384,9 +1389,16 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
     /* The native roll cancel can be evaluated between pad samples. Only
      * replace its sword request when X is held or buffered by that roll. */
     unsigned current=u16(a,STATE),current_action=u16(a,ACTION);
+    if(!world.move&&state==16&&!(byte(a,DRAWN)&1)&&!(raw.held&~ML_R)&&
+       ((raw.held==ML_R&&raw.magnitude>=50)||world.wilds_direction_pending)){
+        WObservation o={.base=raw,.state=current,.alive=1,.grounded=!(word(a,AIR)&0x400),
+            .resources_ready=world_ready(a),.rank=crimson_available(a)?3:0};
+        if(w_sheathed_slide(&o))return 1;
+    }
     unsigned red_roll=w_native_roll(current,current_action)||wilds_roll_tail>0;
     unsigned upper=state==16&&(action<=7||action==25||action==41);
-    if(!world.move&&red_roll&&upper&&(byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&
+    unsigned spirit_one=!world.move&&w_spirit_one_crimson_source(current,current_action,u16(a,MOTION));
+    if(!spirit_one&&!world.move&&red_roll&&upper&&(byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&
        crimson_available(a)&&!(raw.held&~(ML_X|ML_B))&&
        ((raw.held&ML_X)||wilds_roll_x||wilds_roll_input)&&world_ready(a)){
         if(!wilds_roll_x&&!wilds_roll_input){
@@ -1398,9 +1410,25 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
         return 1;
     }
 
+    /* GU's X insertion after Spirit I is action 22, separate from the
+     * ordinary slash requests. It can execute before our F56 combo tick
+     * and after the raw X tap has ended. The request itself owns the press. */
+    if(spirit_one&&state==16&&action==22&&crimson_available(a)&&world_ready(a)&&
+       (byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)){
+        MLObservation input=observe(a,1);
+        w_reserve_spirit_crimson(&world,&input);
+        log_event("wilds_spirit_crimson_reserve",(u32)(uptr)a,current_action,action,(u32)(real(a,FRAME)*1000));
+        return 1;
+    }
+    unsigned red_native=!world.move&&current==16&&
+        (spirit_one||w_valor_chord(current,current_action,u16(a,MOTION),100000.f,ML_X,0)==W_CHIJIN);
+    if(red_native&&upper&&crimson_available(a)&&world_ready(a)&&(byte(a,DRAWN)&1)&&
+       !(word(a,AIR)&0x400)&&(raw.held==ML_X||
+       (world.spirit_crimson_pending&&!(raw.held&~(ML_R|ML_X)))||
+       (spirit_one&&raw.held==(ML_R|ML_X)&&(world.spirit_crimson_held&ML_R))))return 1;
     /* Reserve a fresh chord before GU turns its B edge into a native roll.
      * Hurt, knockback, death and scene changes still use the native path. */
-    if(!world.move&&!(word(a,AIR)&0x400)&&world_ready(a)&&
+    if(!spirit_one&&!world.move&&!(word(a,AIR)&0x400)&&world_ready(a)&&
        ((state==16&&(w_guild_attack(action)||action==41))||(state==1&&action<=14))){
         unsigned current=u16(a,STATE),act=u16(a,ACTION);
         unsigned valid=((current==1||current==2)&&act<=5)||(current==16&&act<154&&real(a,FRAME)>=24);
@@ -1478,7 +1506,7 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
     if(!world.move&&(byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&world_ready(a)){
         unsigned src=w_guild_source(u16(a,STATE),u16(a,ACTION),u16(a,MOTION));
         if(!valor_active(a)&&state==16&&word(a,0x3330)!=3&&
-           (src==104||src==106||src==108||src==112||w_ordinary_charge_source(src))&&
+           (w_spirit_charge_source(src)||src==112||w_ordinary_charge_source(src))&&
            raw.gauge<w_spirit_link_cost(action))return 1;
         unsigned ordinary=src==1||src==101||src==102||src==103||src==105||src==107;
         unsigned window=src==1||(ordinary&&real(a,FRAME)>=24);
@@ -1489,11 +1517,12 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
            (src==1||sheath))return 1;
         /* Keep a leading directional R undecided until the chord grace period
          * has elapsed. Only the core may dispatch its moving opener. */
-        unsigned spirit_packet=(action>=16&&action<=19)||action==23||action==24||action==26||action==27||action==30;
+        unsigned spirit_packet=(action>=16&&action<=19)||action==23||action==24||action==26||action==27||action==30||
+            (action>=48&&action<=50);
         /* A queued ordinary Spirit tap belongs to the bridge until release.
          * GU may request the same successor on that exact update. */
         if(state==16&&spirit_packet&&world.wilds_r_pending&&
-           (src==104||src==106||src==108)&&!(raw.held&~ML_R)){
+           w_spirit_charge_source(src)&&!(raw.held&~ML_R)){
             world_r_gate.active=0;return 1;
         }
         /* Keep the exact native tap, including fade-slash and insertion
@@ -1506,7 +1535,7 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
                 .owner_action=u16(a,ACTION),.owner_state=u16(a,STATE)};
             return 1;
         }
-        if(state==16&&spirit_packet&&raw.held==ML_R&&(src==104||src==106||src==108))return 1;
+        if(state==16&&spirit_packet&&raw.held==ML_R&&w_spirit_charge_source(src))return 1;
         if(state==16&&spirit_packet&&window&&raw.magnitude>=50&&raw.held==ML_R)return 1;
         if(u16(a,ACTION)==30&&src==109&&((state==1||state==2)&&action<=5)&&
            real(a,FRAME)<w_clip(109)->length-1)return 1;
@@ -1721,6 +1750,7 @@ static unsigned world_update(void *a,const MLObservation *b)
     {
      unsigned state=u16(a,STATE),action=u16(a,ACTION),mv=0;
      unsigned ready=!world.move&&(byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&
+        !w_spirit_one_crimson_source(state,action,b->motion)&&
         (int16_t)u16(a,HP)>0&&world_ready(a)&&b->simulation_delta>0&&
         (((state==1||state==2)&&action<=5)||(state==16&&action<154&&real(a,FRAME)>=24));
      unsigned rolling=w_native_roll(state,action);
@@ -2055,7 +2085,8 @@ static unsigned world_update(void *a,const MLObservation *b)
 #if ML_WILDS_MOVES
     if(wilds_clip(world.source))wilds_hit_tick(a);
     if(world.move==W_CHARGE&&(world.source==908||world.source==909||world.source==915)){
-        unsigned percent=(unsigned)(world.wilds_elapsed*100.0f/2.9f);if(percent>100)percent=100;
+        unsigned percent=world.wilds_elapsed>=W_CHARGE_READY_SECONDS?100:
+            (unsigned)(world.wilds_elapsed*(100.f/W_CHARGE_READY_SECONDS));
         ml_wilds_charge(percent+1);
     }else ml_wilds_charge(0);
     /* Horizontal root is authored in the LMT's native usage-4 track. */

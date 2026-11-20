@@ -1,8 +1,10 @@
 #pragma once
 /* Wilds sound requests and ported motion trigger frames. */
-#define WILDS_AUDIO_RESOURCE_COUNT 103u
-#define WILDS_AUDIO_REQUEST_COUNT 107u
-static const unsigned wilds_speed_swings[3][4]={{98,99,100,101},{71,72,73,102},{103,104,105,106}};
+#define WILDS_AUDIO_RESOURCE_COUNT 144u
+#define WILDS_AUDIO_REQUEST_COUNT 148u
+static const unsigned wilds_speed_swings[3][4]={{106,107,108,109},{71,72,73,110},{111,112,113,114}};
+static const unsigned wilds_release_speed_swings[3][4]={{115,116,117,118},{119,120,121,122},{123,124,125,126}};
+static const unsigned wilds_combat_blade_impact_requests[3]={127,128,129};
 static const unsigned wilds_swing_requests[]={71,72,73};
 static const unsigned wilds_release_impact_requests[]={75,76,77};
 static const unsigned wilds_release_blade_impact_requests[]={78,79,80};
@@ -11,17 +13,21 @@ static const unsigned wilds_release_blade_impact_requests[]={78,79,80};
 #define WILDS_SOUND_HANDLING 84u
 #define WILDS_SOUND_SPIRIT 64u
 #define WILDS_SOUND_COUNTER 59u
-#define WILDS_SOUND_HELM 61u
 #define WILDS_SOUND_EQUIPMENT 87u
-static const unsigned wilds_helm_impact_requests[3]={90,91,92};
+static const unsigned wilds_helm_impact_requests[3]={130,131,132};
 static const unsigned wilds_iai_impact_requests[3]={93,94,95};
-#define WILDS_SOUND_HELM_JUMP 88u
-#define WILDS_SOUND_HELM_CUT 89u
-#define WILDS_SOUND_HELM_LAND_GEAR 83u
+#define WILDS_SOUND_HELM 141u
+#define WILDS_SOUND_HELM_JUMP 142u
+#define WILDS_SOUND_HELM_CUT 143u
+#define WILDS_SOUND_HELM_LAND_GEAR 144u
 #define WILDS_SOUND_IAI_CUT 82u
 #define WILDS_SOUND_IAI_RECOVERY 60u
 #define WILDS_SOUND_IAI_COUNTER 96u
 #define WILDS_SOUND_FORESIGHT_COUNTER 97u
+#define WILDS_SOUND_THRUST_CHARGE 133u
+#define WILDS_SOUND_THRUST_CUT 134u
+static const unsigned wilds_body_impact_requests[3]={135,136,137};
+static const unsigned wilds_shell_impact_requests[3]={138,139,140};
 #define WILDS_SOUND_IAI_WHOOSH 73u
 typedef struct {unsigned source;float frame;unsigned request;} WildsAudioCue;
 static const WildsAudioCue wilds_audio_cues[]={
@@ -38,11 +44,11 @@ static const WildsAudioCue wilds_audio_cues[]={
 {903,30.000000f,71},
 {903,42.000000f,61},
 {904,19.000000f,71},
-{904,23.000000f,81},
+{904,23.000000f,145},
 {904,33.000000f,72},
 {904,74.000000f,73},
-{904,78.000000f,82},
-{904,111.000000f,74},
+{904,78.000000f,146},
+{904,111.000000f,147},
 {905,15.000000f,63},
 {905,39.000000f,87},
 {905,41.000000f,54},
@@ -112,15 +118,4 @@ static const WildsAudioCue wilds_audio_cues[]={
 {925,39.000000f,60},
 {925,52.000000f,64},
 {925,60.000000f,73},
-{926,44.000000f,71},
-{926,67.000000f,72},
-{926,95.000000f,73},
-{927,9.000000f,71},
-{927,33.000000f,73},
-{928,10.000000f,71},
-{928,33.000000f,73},
-{929,11.000000f,71},
-{929,26.000000f,73},
-{930,37.000000f,73},
-{914,24.000000f,72},
 };

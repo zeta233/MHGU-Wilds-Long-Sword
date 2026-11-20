@@ -77,12 +77,16 @@ static void world_physics_tick(void *a)
     }
     if(world_air_steering&&world_air_sample!=sample_sequence){
         world_air_sample=sample_sequence;
-        if(real(a,0x1014)<=0||(world.move==W_DOWN&&real(a,FRAME)>=30)){
+        /* The jump is steerable through its apex, until the dive takes
+         * ownership of velocity (MOT173 trigger, frame 30). */
+        if(world.move==W_DOWN&&real(a,FRAME)>=30){
             put(a,0x1010,0);put(a,0x1018,0);
             world_air_steering=0;
         }else{
             MLObservation stick=observe(a,1);
-            float speed=stick.magnitude>=50?1.8f*stick.magnitude/128.f:0;
+            /* Wilds cKabutowariRunUpJump: 2 m/s horizontal velocity
+             * at 1.3 time rate. GU uses centimetres per simulation frame. */
+            float speed=stick.magnitude>=50?(200.f*1.3f/60.f)*stick.magnitude/128.f:0;
             float blend=real(a,0x1c)*.3f;
             if(blend>1)blend=1;
             if(blend>0){

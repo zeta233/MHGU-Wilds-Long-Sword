@@ -1,5 +1,6 @@
 """Build a GU combat adaptation from traced, user-owned Wilds clips."""
 from portkit import *
+from build_charge_walk import STAND_SLOT, WALK_SLOT, edit as build_charge_walk
 from combat_rules import MOVES,STRIKES,SHARED_STRIKES,CRIMSON_STRIKES,RETIRED_CRIMSON_ROWS,SPIRIT_NATIVE_ROWS,SPIRIT_ROUND_ROWS
 
 def fromto(a,b):
@@ -117,6 +118,11 @@ def build(out,combat_base=None):
   roots.extend(positions[255] if source==920 else [r-rawroots[0] for r in rawroots])
   manifest.append(dict(label=label,clip=clip['name'],source=source,slot=slot,frames=frames,offset=offset,cancel=cancel,recovery=min(recovery,frames-1),max_solved_contact_error=maxerr))
   print(label,frames,'IK residual',round(maxerr,4),flush=True)
+ walk=next(clip for clip in manifest if clip['slot']==WALK_SLOT)
+ stand=next(clip for clip in manifest if clip['slot']==STAND_SLOT)
+ if Lmt(data).tracks(WALK_SLOT)[0]!=stand['frames']:
+  data=build_charge_walk(data)
+ walk.update(frames=stand['frames'],offset=stand['offset'],recovery=stand['recovery'])
  # Dedicated native rows: zero startup, long native duration, explicitly gated
  # by the plugin's finite frame windows. No old custom rows are overwritten.
  hdp=next(e.data() for e in entries if e.name.endswith('hitdata'));hdp=bytearray(hdp);row_count=unpack('I',hdp,8)[0];strikes=[]
@@ -163,7 +169,7 @@ def build(out,combat_base=None):
     assert prior[:8]==expected[:8] and prior[12:]==expected[12:len(prior)], name
  arc_replace(combat_base or BASE_ARC,out/'combat.arc',replacements);(out/'combat.lmt').write_bytes(data)
  for slot in range(Lmt(original).count):
-  if slot not in [x[2] for x in MOVES if not combat_base or not unpack('I',original,8+x[2]*4)[0]]:assert original[8+slot*4:12+slot*4]==data[8+slot*4:12+slot*4]
+  if slot!=WALK_SLOT and slot not in [x[2] for x in MOVES if not combat_base or not unpack('I',original,8+x[2]*4)[0]]:assert original[8+slot*4:12+slot*4]==data[8+slot*4:12+slot*4]
  meta=['#pragma once','typedef struct {unsigned source,slot,frames,offset,cancel,recovery;} WildsClip;','static const WildsClip wilds_clips[]={']
  meta+=[' {%du,%du,%du,%du,%du,%du},'%(x['source'],x['slot'],x['frames'],x['offset'],x['cancel'],x['recovery']) for x in manifest]
  meta+=['};','typedef struct {unsigned source,begin,end,row,tiered;} WildsStrike;','static const WildsStrike wilds_strikes[]={']

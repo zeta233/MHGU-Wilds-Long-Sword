@@ -1,5 +1,6 @@
 /* GU owns part IDs and damage. Keep the opening contact in the hit
  * bone's space so the effect follows the same spot as the monster poses. */
+#include "world_wound_surface.inc"
 enum { WOUND_MONSTERS=10, WOUND_PARTS=8, WOUND_MARKERS=12 };
 typedef struct {
     unsigned progress;
@@ -9,6 +10,7 @@ typedef struct {
     int bone;
     float local[3];
     unsigned burst_damage,burst_shown;
+    WSurfaceAnchor surface;
 } WWound;
 typedef struct {
     void *target,*status;
@@ -153,7 +155,7 @@ static unsigned world_wound_position(void *target,const WWound *w,float *p)
 
 static void world_wound_anchor(WWound *w,void *target,const void *part,const float *point)
 {
-    w->part_table=0;
+    w->part_table=0;w->surface.model=0;
     const void *table=world_wound_part_table(target);
     if(!table||(uptr)part<(uptr)table)return;
     unsigned offset=(uptr)part-(uptr)table;
@@ -178,20 +180,16 @@ static void world_wound_anchor(WWound *w,void *target,const void *part,const flo
     const float *m=world_bone(target,bone);
     if(!m||!world_inverse(m,point,w->local))return;
     w->bone=bone;w->part_index=offset/44;w->part_table=table;
+    if(surface_bind(target,part,point,&w->surface))
+        log_event("wilds_wound_surface",(u32)(uptr)target,w->part_index,w->surface.mesh,bone);
 }
 
 /* Settle the reserved wound once the directional finisher closes its last hitbox. */
 static void world_finish_focus_burst(void *actor,float frame)
 {
     if(!focus_burst.target)return;
-    unsigned end;
-    switch(world.source){
-    case 914:end=35;break;
-    case W_FOCUS_LEFT:case W_FOCUS_RIGHT:end=42;break;
-    case W_FOCUS_BACK:end=37;break;
-    default:return;
-    }
-    if(frame<end)return;
+    unsigned end=w_focus_finisher_end(world.source);
+    if(!end||frame<end)return;
     void *target=focus_burst.target,*status=focus_burst.status;
     focus_burst.target=0;
     const void *registry=(const void *)(uptr)word((void *)main_base,0x1851fe0);
@@ -205,8 +203,9 @@ static void world_finish_focus_burst(void *actor,float frame)
     w->burst_damage=applied>0?(unsigned)applied:0;
     w->flash=world_elapsed+.85f;w->burst_shown=0;
 #if ML_WORLD_PRESENTATION
-    float pos[3];
-    if(world_wound_position(target,w,pos))world_helm_impact(actor,pos);
+    WSurfaceModel model;WSurfaceVec pos,normal;
+    if(w->surface.model&&surface_model(&model,target)&&surface_sample(&model,target,&w->surface,&pos,&normal))
+        world_helm_impact(actor,&pos.x);
 #endif
     log_event("wilds_wound_burst",region,world.source,bonus,w->burst_damage);
 }
@@ -291,6 +290,55 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
     }
 }
 
+typedef struct {
+    WSurfaceVec start,end;
+    float radius2;
+    unsigned row;
+} WWoundOccluder;
+
+static unsigned wound_occluders(void *target,const void *table,WWoundOccluder *out,unsigned capacity)
+{
+    unsigned count=0;
+    for(unsigned row=0;row<64&&count<capacity;++row){
+        const void *part=(const void *)((uptr)table+44*row);
+        if(u16(part,0)==65535)break;
+        if(!(real(part,16)>12.f)||((unsigned (*)(void *,unsigned))(*(uptr **)target)[0x370/4])(target,u16(part,12)))continue;
+        _Alignas(16) float pose[12]={0};
+        unsigned kind=world_wound_pose(target,part,pose);
+        if((kind!=1&&kind!=2)||!(pose[8]>0))continue;
+        WSurfaceVec start={pose[0],pose[1],pose[2]};
+        WSurfaceVec end=kind==2?(WSurfaceVec){pose[4],pose[5],pose[6]}:start;
+        /* Hurt volumes extend beyond the skin. Only use the inner part
+         * as a conservative occluder for another wound's marker. */
+        float radius=pose[8]*.85f;
+        out[count++]=(WWoundOccluder){start,end,radius*radius,row};
+    }
+    return count;
+}
+
+static unsigned wound_hidden(WSurfaceVec point,WSurfaceVec view_dir,const WWoundOccluder *volumes,
+                             unsigned count,unsigned wound_row)
+{
+    float view2=surface_dot(view_dir,view_dir);
+    if(!(view2>4.f))return 1;
+    for(unsigned i=0;i<count;++i){
+        const WWoundOccluder *v=volumes+i;
+        if(v->row==wound_row)continue;
+        WSurfaceVec line=surface_sub(v->end,v->start),delta=surface_sub(v->start,point);
+        float axis2=surface_dot(line,line),cross=surface_dot(view_dir,line),projection=surface_dot(delta,view_dir);
+        float det=view2*axis2-cross*cross;
+        float along=det>.001f?(projection*cross-view2*surface_dot(delta,line))/det:0;
+        if(along<0)along=0;
+        if(along>1)along=1;
+        delta=surface_add(delta,line,along);
+        float t=surface_dot(delta,view_dir)/view2;
+        if(t<=.035f||t>=1)continue;
+        WSurfaceVec separation=surface_add(delta,view_dir,-t);
+        if(surface_dot(separation,separation)<v->radius2)return 1;
+    }
+    return 0;
+}
+
 static void world_wound_markers(void *a,void *camera)
 {
     unsigned aiming=(ml_pad_raw_bits()&PAD_FOCUS)&&(byte(a,DRAWN)&1);
@@ -310,16 +358,38 @@ static void world_wound_markers(void *a,void *camera)
         if(!m->target||word(registry,0x1c+4*i)!=(u32)(uptr)m->target||
            word(m->target,0x1428)!=(u32)(uptr)m->status||u16(m->status,0x1b6)!=m->id||
            byte(m->target,AREA)!=byte(a,AREA))continue;
+        if(!aiming){
+            unsigned j=0;
+            while(j<WOUND_PARTS&&m->parts[j].flash<=world_elapsed)++j;
+            if(j==WOUND_PARTS)continue;
+        }
+        const void *table=world_wound_part_table(m->target);
+        const WSurfaceVec eye={real(camera,0x40),real(camera,0x44),real(camera,0x48)};
+        WSurfaceModel model;
+        WWoundOccluder volumes[48];
+        unsigned loaded=0,volume_count=0,volumes_ready=0;
         for(unsigned j=0;j<WOUND_PARTS&&marker<WOUND_MARKERS;++j){
             WWound *w=m->parts+j;
             unsigned kind=w->flash>world_elapsed?2:
                 aiming&&w->until>world_elapsed&&(int)word(m->status,0x370)>0?1:0;
-            if(!kind)continue;
-            float p[3],screen[4];
-            if(!world_wound_position(m->target,w,p))continue;
-            /* Use the same active viewport projection as the native HUD.
-             * It returns a 1280x720 logical position and clip visibility. */
-            ((void (*)(float *,const float *,unsigned))(main_base+0x551340))(screen,p,view);
+            if(!kind||!w->surface.model||!table||w->part_table!=table)continue;
+            const void *part=(const void *)((uptr)table+44*w->part_index);
+            if(((unsigned (*)(void *,unsigned))(*(uptr **)m->target)[0x370/4])(m->target,u16(part,12)))continue;
+            if(!loaded){if(!surface_model(&model,m->target))break;loaded=1;}
+            WSurfaceVec point,normal;
+            if(!surface_sample(&model,m->target,&w->surface,&point,&normal))continue;
+            /* The strip winding gives the outward normal. Hide the dot
+             * on the far side without scanning the monster mesh each frame. */
+            WSurfaceVec view_dir=surface_sub(eye,point);
+            float facing=surface_dot(normal,view_dir);
+            if(facing<=0||facing*facing<.1296f*surface_dot(normal,normal)*surface_dot(view_dir,view_dir))continue;
+            if(!volumes_ready){
+                volume_count=wound_occluders(m->target,table,volumes,sizeof(volumes)/sizeof(*volumes));
+                volumes_ready=1;
+            }
+            if(wound_hidden(point,view_dir,volumes,volume_count,w->part_index))continue;
+            float screen[4];
+            ((void (*)(float *,const float *,unsigned))(main_base+0x551340))(screen,&point.x,view);
             if(screen[3]>0&&screen[2]>0&&screen[0]>0&&screen[0]<1280&&screen[1]>0&&screen[1]<720){
                 unsigned sx=(unsigned)(screen[0]*(4094.0f/1280));
                 unsigned sy=(unsigned)((720-screen[1])*(4094.0f/720));

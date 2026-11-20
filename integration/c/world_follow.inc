@@ -138,14 +138,19 @@ static void world_impact_sound(void *manager,void *target,void *attack,const flo
         world_sfx_emit((void *)(uptr)world.actor,point,0x3f60);
     enum WAudioImpact impact=shell?W_SOUND_RELEASE_FOLLOW:follow==1?W_SOUND_HELM_FOLLOW:
         follow?W_SOUND_IAI_FOLLOW:blade&&world.move==W_CHIJIN&&crimson_final_strike?
-        W_SOUND_CRIMSON_FINISH:world.move==W_RELEASE?W_SOUND_RELEASE_BLADE:W_SOUND_BLADE;
+        W_SOUND_CRIMSON_FINISH:world.move==W_RELEASE?W_SOUND_RELEASE_BLADE:
+        world.move==W_THRUST?W_SOUND_THRUST_BLADE:W_SOUND_BLADE;
     if(!blade&&!delayed){
         world_original_impact_sound(manager,target,attack,point);
         return;
     }
-    /* Keep GU's contact sound dispatch alongside the Wilds layer. Delayed
-     * shells may suppress visuals, so expose the slash effect only during
-     * this synchronous sound call. */
+    unsigned wilds_only=shell||follow==1||(blade&&(world.move==W_THRUST||world.move==W_RELEASE));
+    if(wilds_only&&world_audio_impact(u16(attack,0x34),impact,delayed?delayed->ordinal:0,point)){
+        log_event("wilds_impact_sound",world.actor,shell?1040:follow?1041+follow:world.source,
+                  (u32)(uptr)target,u16(attack,0x34));
+        return;
+    }
+    /* Retain the native contact handler for the other weapon routes. */
     unsigned char *collider=(unsigned char *)attack;
     unsigned sound=collider[0x55],effect=collider[0x52];
     unsigned round=blade&&(world.source==109||world.source==917);

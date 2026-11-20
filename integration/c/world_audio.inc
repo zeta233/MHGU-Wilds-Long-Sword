@@ -148,7 +148,8 @@ static unsigned wilds_resolve_wind(void *a,unsigned request)
     // Both of this weapon's two-entry containers avoid the preceding media.
     unsigned variant=wilds_wind_last?((wilds_wind_last-1)^3):(wilds_audio_random((u32)(uptr)a)&3);
     wilds_wind_last=variant+1;
-    return wilds_speed_swings[wilds_wind_speed][variant];
+    const unsigned (*swings)[4]=world.source==904?wilds_release_speed_swings:wilds_speed_swings;
+    return swings[wilds_wind_speed][variant];
 }
 #endif
 static void world_audio_play(void *a,unsigned request,const float *point)
@@ -172,30 +173,32 @@ static unsigned world_audio_impact(unsigned id,enum WAudioImpact impact,unsigned
     void *a=(void *)(uptr)world.actor;
     if(!world_audio_ready||!point||!a||a!=(void *)(uptr)world_audio_actor||
        byte(a,AREA)!=world_audio_epoch||!*(void **)(main_base+0x1896f5c))return 0;
-    if((impact==W_SOUND_HELM_FOLLOW||impact==W_SOUND_RELEASE_FOLLOW)&&
-       word(world_audio_request,0x68)>GU_FOLLOW_FINISH_SOUND){
-        unsigned last=impact==W_SOUND_HELM_FOLLOW?6:11;
-        unsigned request=ordinal==last?GU_FOLLOW_FINISH_SOUND:GU_FOLLOW_SOUND+(ordinal&1);
-        world_audio_play(a,request,point);
-        log_event("wilds_gu_follow_audio",world.actor,id,request,ordinal);
-    }
     const unsigned *requests=wilds_release_blade_impact_requests;
     const char *event="wilds_native_hit_audio";
     switch(impact){
-    case W_SOUND_RELEASE_BLADE: event="wilds_release_blade_audio";break;
-    case W_SOUND_RELEASE_FOLLOW: requests=wilds_release_impact_requests;event="wilds_release_impact_audio";break;
-    case W_SOUND_HELM_FOLLOW: requests=wilds_helm_impact_requests;event="wilds_helm_impact_audio";break;
+    case W_SOUND_THRUST_BLADE: requests=wilds_combat_blade_impact_requests;event="wilds_thrust_blade_audio";break;
+    case W_SOUND_HELM_BLADE: requests=wilds_helm_impact_requests;event="wilds_helm_blade_audio";break;
+    case W_SOUND_RELEASE_BLADE: requests=wilds_combat_blade_impact_requests;event="wilds_release_blade_audio";break;
+    case W_SOUND_RELEASE_FOLLOW: requests=wilds_shell_impact_requests;event="wilds_release_impact_audio";break;
+    case W_SOUND_HELM_FOLLOW: requests=wilds_shell_impact_requests;event="wilds_helm_impact_audio";break;
     case W_SOUND_IAI_FOLLOW: requests=wilds_iai_impact_requests;event="wilds_iai_impact_audio";break;
     case W_SOUND_CRIMSON_FINISH: event="wilds_crimson_finish_audio";break;
     case W_SOUND_BLADE: break;
     }
     static unsigned last_blade,last_follow;
-    unsigned *last=requests==wilds_release_blade_impact_requests?&last_blade:&last_follow;
+    unsigned *last=(requests==wilds_release_blade_impact_requests||requests==wilds_combat_blade_impact_requests)?&last_blade:&last_follow;
     unsigned random=wilds_audio_random((u32)(uptr)a);
     unsigned choice=*last?(random%2+*last)%3:random%3;
     *last=choice+1;
     unsigned request=requests[choice];
     world_audio_play(a,request,point);
+    if(impact==W_SOUND_THRUST_BLADE||impact==W_SOUND_HELM_BLADE||impact==W_SOUND_RELEASE_BLADE){
+        unsigned response=wilds_body_impact_requests[choice];
+        world_audio_play(a,response,point);
+        log_event("wilds_damage_audio",world.actor,id,response,world.source);
+    }else if(impact==W_SOUND_HELM_FOLLOW||impact==W_SOUND_RELEASE_FOLLOW){
+        log_event("wilds_damage_audio",world.actor,id,request,ordinal);
+    }
     if(impact==W_SOUND_CRIMSON_FINISH){
         const unsigned *accent=world.source==907?wilds_release_impact_requests:wilds_iai_impact_requests;
         world_audio_play(a,accent[choice],point);
@@ -322,7 +325,7 @@ static void world_audio_epv(void *a,unsigned request,const float *origin)
 static void world_audio_blade(void *a,const float *point)
 {
 #if ML_WILDS_MOVES
-    if(!world_audio_impact(world_attack_id,W_SOUND_BLADE,0,point))world_audio_play(a,WORLD_AUDIO_HELM_WAVE,point);
+    if(!world_audio_impact(world_attack_id,W_SOUND_HELM_BLADE,0,point))world_audio_play(a,WORLD_AUDIO_HELM_WAVE,point);
 #else
     world_audio_play(a,WORLD_AUDIO_HELM_WAVE,point);
 #endif
@@ -421,6 +424,7 @@ static void world_audio_tick(void *a)
      * A short vault can go directly from air to landing. Play the swing
      * at that transition if the descent clip was bypassed. */
     static const WildsAudioCue follow_cues[]={
+        {170,10,WILDS_SOUND_THRUST_CHARGE},{170,83,WILDS_SOUND_THRUST_CUT},
         {172,1,WILDS_SOUND_HELM_JUMP},
         {173,0,WILDS_SOUND_HELM_CUT},
         {174,0,WILDS_SOUND_HELM_CUT},
@@ -441,6 +445,7 @@ static void world_audio_tick(void *a)
         world_audio_play(a,cue->request,0);
         log_event("wilds_audio_cue",(u32)(uptr)a,world.source,cue->request,(u32)real(a,FRAME));
     }
+    if(world.source>=170&&world.source<=174)return;
     if((world.source>=901&&world.source<=918)||(world.source>=W_CRIMSON_STATIONARY&&world.source<=W_CRIMSON_SPIN)){
         for(unsigned i=0;i<sizeof(wilds_audio_cues)/sizeof(*wilds_audio_cues);++i){
             const WildsAudioCue *cue=wilds_audio_cues+i;uint64_t bit=(uint64_t)1<<(i%64);

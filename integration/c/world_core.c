@@ -260,7 +260,8 @@ unsigned w_rotation(WState *s,const WObservation *o,unsigned *heading)
     float dt=b->simulation_delta/60.0f;
     if(!(dt>0&&dt<.5f))return 0;
     if(s->move==W_CHARGE&&s->source==915&&b->magnitude>=50){
-        int delta=ml_heading_delta(b->input_heading,b->heading),cap=(int)(43690.6667f*dt);
+        /* Wilds cKijinChargeWalk turns the authored forward root at 100 degrees/s. */
+        int delta=ml_heading_delta(b->input_heading,b->heading),cap=(int)((65536.f*100.f/360.f)*dt);
         if(delta>cap)delta=cap;else if(delta< -cap)delta= -cap;
         s->heading=*heading=(b->heading+delta)&65535u;return 1;
     }
@@ -337,7 +338,8 @@ WDecision w_leave(WState *s)
     if(s->move==W_BIG&&!s->rank_paid&&!s->counter_success&&s->rank)d.rank_delta=-1;
 #endif
     if(s->helm_cost_pending&&s->rank)d.rank_delta-=1;
-    s->helm_cost_pending=0;s->red_foresight_chain=0;
+    s->helm_cost_pending=0;s->red_foresight_chain=0;s->wilds_charge_link=0;
+    s->spirit_crimson_pending=s->spirit_crimson_repeat=0;
     s->move=s->bound=s->queued=0;s->source=s->slot=0;s->ground_node=s->main_source=0;return d;
 }
 /* Free movement turns into the stick. Focus holds a camera-relative
@@ -473,10 +475,23 @@ unsigned w_red_draw(const WObservation *o)
     return !o->drawn&&o->rank==3&&o->alive&&o->grounded&&o->resources_ready&&
         (o->state==1||o->state==2)&&o->base.native_action<=5;
 }
+#if ML_WILDS_MOVES
+unsigned w_sheathed_slide(const WObservation *o)
+{
+    return !o->drawn&&o->alive&&o->grounded&&o->resources_ready&&spirit_available(o,10)&&
+        (o->state==1||o->state==2)&&o->base.native_action<=5;
+}
+#endif
 WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move)
 {
     if(move<W_CHIJIN||move>W_FOCUS||!o->alive||!o->grounded||!o->resources_ready)return (WDecision){0};
-    if(!o->drawn&&(move!=W_CHIJIN||s->move||!w_red_draw(o)))return (WDecision){0};
+    if(!o->drawn){
+        unsigned draw=move==W_CHIJIN&&w_red_draw(o);
+#if ML_WILDS_MOVES
+        draw|=move==W_SLIDE&&o->base.magnitude>=50&&w_sheathed_slide(o);
+#endif
+        if(s->move||!draw)return (WDecision){0};
+    }
     if(move==W_CHIJIN&&o->rank!=3)return (WDecision){0};
     if(move==W_RELEASE&&(s->move!=W_LAND||!s->wilds_helm_red||
        o->rank<1+s->helm_cost_pending))return (WDecision){0};
@@ -600,11 +615,22 @@ WDecision w_step(WState *s,const WObservation *o)
         w_reset(s);s->actor=b->actor;s->epoch=b->epoch;
         s->previous_held=s->consumed=b->held;w_keys_tick(&s->keys,b);return d;
     }
+#if ML_WILDS_MOVES && ML_WORLD_INPUT_VM
+    if(!s->move&&w_sheathed_slide(o)){
+        s->controls=(WControls){0};
+        s->wilds_charge_link=0;
+        return wilds_bridge(s,o,1);
+    }
+    if(!o->drawn){
+        s->wilds_direction_pending=0;
+        s->wilds_bridge_held=b->held;
+    }
+#endif
     unsigned sheathing=s->move==W_SHEATHE_END;
 #if ML_WILDS_MOVES
     sheathing|=(s->source==917&&b->animation_frame>=W_ROUND_SHEATHE_FRAME)||(s->source==904&&b->animation_frame>=140);
 #endif
-    if(!o->alive||(!o->drawn&&!sheathing)||!o->resources_ready){if(!s->move){s->controls=(WControls){0};return d;}d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
+    if(!o->alive||(!o->drawn&&!sheathing)||!o->resources_ready){if(!s->move){s->controls=(WControls){0};s->wilds_charge_link=0;s->wilds_charge_open=0;s->wilds_chain_source=0;s->spirit_crimson_pending=0;return d;}d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
     w_keys_tick(&s->keys,b);
     if(s->move&&!w_private(o->state,b->native_action)){d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
     unsigned new_sample=s->sample!=b->sample_sequence;
@@ -640,10 +666,6 @@ WDecision w_step(WState *s,const WObservation *o)
 #if ML_WILDS_MOVES
         if(s->move==W_BIG&&s->rank==3&&o->rank==3&&s->counter_success&&s->hit_success&&!s->wilds_iai_recovered){
             s->wilds_iai_recovered=1;d.red_recovery|=W_RED_IAI;
-        }
-        if(s->move==W_FOCUS&&s->wilds_focus_break&&!s->rank_paid){
-            s->rank_paid=1;
-            if(o->rank<3)d.rank_delta++;
         }
 #endif
         if(s->move==W_LAND&&s->helm_cost_pending&&new_sample&&
