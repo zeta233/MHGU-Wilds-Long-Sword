@@ -167,11 +167,18 @@ static void world_audio_play(void *a,unsigned request,const float *point)
     log_event("world_audio_play",(u32)(uptr)a,request,(u32)(uptr)world_audio_request,(u32)(world_audio_clock*1000000));
 }
 #if ML_WILDS_MOVES && ML_WORLD_PRESENTATION
-static unsigned world_audio_impact(unsigned id,enum WAudioImpact impact,const float *point)
+static unsigned world_audio_impact(unsigned id,enum WAudioImpact impact,unsigned ordinal,const float *point)
 {
     void *a=(void *)(uptr)world.actor;
     if(!world_audio_ready||!point||!a||a!=(void *)(uptr)world_audio_actor||
        byte(a,AREA)!=world_audio_epoch||!*(void **)(main_base+0x1896f5c))return 0;
+    if((impact==W_SOUND_HELM_FOLLOW||impact==W_SOUND_RELEASE_FOLLOW)&&
+       word(world_audio_request,0x68)>GU_FOLLOW_FINISH_SOUND){
+        unsigned last=impact==W_SOUND_HELM_FOLLOW?6:11;
+        unsigned request=ordinal==last?GU_FOLLOW_FINISH_SOUND:GU_FOLLOW_SOUND+(ordinal&1);
+        world_audio_play(a,request,point);
+        log_event("wilds_gu_follow_audio",world.actor,id,request,ordinal);
+    }
     const unsigned *requests=wilds_release_blade_impact_requests;
     const char *event="wilds_native_hit_audio";
     switch(impact){
@@ -315,7 +322,7 @@ static void world_audio_epv(void *a,unsigned request,const float *origin)
 static void world_audio_blade(void *a,const float *point)
 {
 #if ML_WILDS_MOVES
-    if(!world_audio_impact(world_attack_id,W_SOUND_BLADE,point))world_audio_play(a,WORLD_AUDIO_HELM_WAVE,point);
+    if(!world_audio_impact(world_attack_id,W_SOUND_BLADE,0,point))world_audio_play(a,WORLD_AUDIO_HELM_WAVE,point);
 #else
     world_audio_play(a,WORLD_AUDIO_HELM_WAVE,point);
 #endif

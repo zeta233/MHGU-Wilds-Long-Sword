@@ -40,15 +40,20 @@ static unsigned world_primary_helm(void *attack)
 typedef struct {unsigned shell,request,helm_impact,kind;float until,point[3];
     unsigned attached,target,uid,ordinal;int bone;float local[3];const void *part_table;void *part;} WShellPosition;
 static WShellPosition world_shell_positions[64];
-static const WShellPosition *world_release_shell(void *attack)
+static const WShellPosition *world_find_shell(void *attack)
 {
     for(unsigned i=0;i<64;++i){
         const WShellPosition *p=world_shell_positions+i;
-        if(p->kind==4&&p->shell+0x13a8==(u32)(uptr)attack&&world_elapsed<=p->until&&
+        if(p->kind&&p->shell+0x13a8==(u32)(uptr)attack&&world_elapsed<=p->until&&
            p->request==word((void *)(uptr)p->shell,0x136c))
             return p;
     }
     return 0;
+}
+static const WShellPosition *world_release_shell(void *attack)
+{
+    const WShellPosition *p=world_find_shell(attack);
+    return p&&p->kind==4?p:0;
 }
 
 static void world_monster_damage(void *manager,void *attack,void *target,void *point,
@@ -118,7 +123,9 @@ static void world_impact_sound(void *manager,void *target,void *attack,const flo
         (uptr)attack==(uptr)world_attack_actor+0x3020&&u16(attack,0x34)==world_attack_id;
     if(blade)
         log_event("wilds_blade_hitstop",world.actor,world.source,byte(attack,0x57),byte(attack,6));
-    unsigned shell=!blade&&world_release_shell(attack)!=0;
+    const WShellPosition *delayed=blade?0:world_find_shell(attack);
+    unsigned follow=delayed?delayed->kind:0;
+    unsigned shell=follow==4;
     /* Use the contact reported by GU, including delayed release hits which
      * may land after the hunter has already started another move. */
     if(point&&world.actor&&(shell||(blade&&wilds_clip(world.source))))
@@ -129,20 +136,10 @@ static void world_impact_sound(void *manager,void *target,void *attack,const flo
     }
     if(point&&blade&&world.move==W_CHIJIN&&crimson_final_strike)
         world_sfx_emit((void *)(uptr)world.actor,point,0x3f60);
-    unsigned follow=0;
-    if(!blade&&!shell){
-        for(unsigned i=0;i<64;++i){
-            const WShellPosition *p=world_shell_positions+i;
-            if(p->kind>=1&&p->kind<=3&&p->shell+0x13a8==(u32)(uptr)attack&&
-               world_elapsed<=p->until&&p->request==word((void *)(uptr)p->shell,0x136c)){
-                follow=p->kind;break;
-            }
-        }
-    }
     enum WAudioImpact impact=shell?W_SOUND_RELEASE_FOLLOW:follow==1?W_SOUND_HELM_FOLLOW:
         follow?W_SOUND_IAI_FOLLOW:blade&&world.move==W_CHIJIN&&crimson_final_strike?
         W_SOUND_CRIMSON_FINISH:world.move==W_RELEASE?W_SOUND_RELEASE_BLADE:W_SOUND_BLADE;
-    if(!blade&&!shell&&!follow){
+    if(!blade&&!delayed){
         world_original_impact_sound(manager,target,attack,point);
         return;
     }
@@ -162,7 +159,7 @@ static void world_impact_sound(void *manager,void *target,void *attack,const flo
     collider[0x52]=(unsigned char)effect;
     collider[0x55]=(unsigned char)sound;
     world_contact_audio_scope=previous_scope;
-    if(!round)world_audio_impact(u16(attack,0x34),impact,point);
+    if(!round)world_audio_impact(u16(attack,0x34),impact,delayed?delayed->ordinal:0,point);
     log_event("wilds_impact_sound",world.actor,shell?1040:follow?1041+follow:world.source,
               (u32)(uptr)target,u16(attack,0x34));
 }

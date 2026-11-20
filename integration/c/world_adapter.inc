@@ -246,7 +246,7 @@ static void world_audio_epv(void *,unsigned,const float *);
 static void world_audio_blade(void *,const float *);
 #if ML_WILDS_MOVES
 enum WAudioImpact { W_SOUND_CRIMSON_FINISH,W_SOUND_BLADE,W_SOUND_RELEASE_BLADE,W_SOUND_RELEASE_FOLLOW,W_SOUND_HELM_FOLLOW,W_SOUND_IAI_FOLLOW };
-static unsigned world_audio_impact(unsigned,enum WAudioImpact,const float *);
+static unsigned world_audio_impact(unsigned,enum WAudioImpact,unsigned,const float *);
 static unsigned world_helm_wind_played;
 #else
 static void world_audio_tail(void *,float,const float *);
