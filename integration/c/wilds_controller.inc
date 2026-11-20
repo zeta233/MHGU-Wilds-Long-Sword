@@ -59,25 +59,25 @@ static unsigned wilds_fade_action(const WObservation *o)
 }
 static WDecision wilds_spirit(WState *s,const WObservation *o)
 {
-    if(s->source==902){
-        if(!spirit_available(o,25))return (WDecision){0};
-        s->wilds_tier=4;
-        WDecision d=wilds_phase(s,o,917);
-        if(o->rank!=3)d.gauge_delta=-25;
-        return d;
-    }
     if(o->valor&&s->move==W_CHIJIN){
         unsigned moving=s->wilds_r_direction,heading=s->wilds_direction_heading,input=s->wilds_direction_input;
         WDecision d=wilds_native(s,o,130);
         d.valor_slide=moving;d.valor_slide_heading=heading;d.valor_slide_input=input;
         return d;
     }
-    if(s->move==W_CHIJIN&&s->wilds_r_direction){
+    if((s->move==W_CHIJIN||s->source==902)&&s->wilds_r_direction){
         WObservation next=*o;
         next.base.heading=s->wilds_direction_heading;next.base.input_heading=s->wilds_direction_input;
         next.base.magnitude=100;
         WDecision d=w_wilds_enter(s,&next,W_SLIDE);
         if(d.kind!=W_KEEP)return d;
+    }
+    if(s->source==902){
+        if(s->wilds_r_direction||!spirit_available(o,25))return (WDecision){0};
+        s->wilds_tier=4;
+        WDecision d=wilds_phase(s,o,917);
+        if(o->rank!=3)d.gauge_delta=-25;
+        return d;
     }
     if(s->move==W_SLIDE){
         if(!spirit_available(o,wilds_spirit_is_two(s->source)?20:15))return (WDecision){0};
@@ -300,7 +300,8 @@ static WDecision wilds_step(WState *s,const WObservation *o)
     }
     unsigned charge_window=wilds_charge_window(s,o);
     unsigned repeat=s->spirit_crimson_repeat;
-    unsigned holding_charge=charge_window&&b->held==ML_R&&s->spirit_crimson_pending!=W_SPIRIT_CRIMSON_NEXT;
+    unsigned holding_charge=charge_window&&b->held==ML_R&&s->spirit_crimson_pending!=W_SPIRIT_CRIMSON_NEXT&&
+        !(s->source==902&&(b->magnitude>=50||(s->wilds_r_pending&&s->wilds_r_direction)));
     s->wilds_charge_link=0;
     if(charge_window){
         if(holding_charge)s->wilds_bridge_hold+=dt;else s->wilds_bridge_hold=0;
@@ -343,7 +344,13 @@ static WDecision wilds_step(WState *s,const WObservation *o)
             unsigned stage=s->wilds_stage;
             if(ready)stage=4;
             else if(s->wilds_elapsed>=1.6f&&stage<3)stage=3;
-            if(stage==2)return wilds_native(s,o,o->valor?116:23);
+            if(stage==2){
+                if(b->magnitude>=50&&spirit_available(o,15)){
+                    wilds_spirit_direction(s,b);
+                    return wilds_moving_spirit_two(s,o);
+                }
+                return wilds_native(s,o,o->valor?116:23);
+            }
             return wilds_phase(s,o,stage==4?917:902);
         }
         WDecision d={0};

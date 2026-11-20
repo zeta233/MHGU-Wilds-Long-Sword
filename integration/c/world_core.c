@@ -479,7 +479,8 @@ unsigned w_red_draw(const WObservation *o)
 unsigned w_sheathed_slide(const WObservation *o)
 {
     return !o->drawn&&o->alive&&o->grounded&&o->resources_ready&&spirit_available(o,10)&&
-        (o->state==1||o->state==2)&&o->base.native_action<=5;
+        (o->state==1||o->state==2)&&o->base.native_action<=5&&
+        o->base.held==(ML_R|ML_X|ML_A)&&o->base.magnitude>=50;
 }
 #endif
 WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move)
@@ -488,7 +489,7 @@ WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move)
     if(!o->drawn){
         unsigned draw=move==W_CHIJIN&&w_red_draw(o);
 #if ML_WILDS_MOVES
-        draw|=move==W_SLIDE&&o->base.magnitude>=50&&w_sheathed_slide(o);
+        draw|=move==W_SLIDE&&w_sheathed_slide(o);
 #endif
         if(s->move||!draw)return (WDecision){0};
     }
@@ -616,11 +617,6 @@ WDecision w_step(WState *s,const WObservation *o)
         s->previous_held=s->consumed=b->held;w_keys_tick(&s->keys,b);return d;
     }
 #if ML_WILDS_MOVES && ML_WORLD_INPUT_VM
-    if(!s->move&&w_sheathed_slide(o)){
-        s->controls=(WControls){0};
-        s->wilds_charge_link=0;
-        return wilds_bridge(s,o,1);
-    }
     if(!o->drawn){
         s->wilds_direction_pending=0;
         s->wilds_bridge_held=b->held;
@@ -628,7 +624,7 @@ WDecision w_step(WState *s,const WObservation *o)
 #endif
     unsigned sheathing=s->move==W_SHEATHE_END;
 #if ML_WILDS_MOVES
-    sheathing|=(s->source==917&&b->animation_frame>=W_ROUND_SHEATHE_FRAME)||(s->source==904&&b->animation_frame>=140);
+    sheathing|=(s->source==917&&b->animation_frame>=W_ROUND_SHEATHE_FRAME)||(s->source==904&&b->animation_frame>=W_RELEASE_SHEATHE_FRAME);
 #endif
     if(!o->alive||(!o->drawn&&!sheathing)||!o->resources_ready){if(!s->move){s->controls=(WControls){0};s->wilds_charge_link=0;s->wilds_charge_open=0;s->wilds_chain_source=0;s->spirit_crimson_pending=0;return d;}d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
     w_keys_tick(&s->keys,b);

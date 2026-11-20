@@ -1,5 +1,6 @@
 #if ML_WILDS_MOVES
 static unsigned world_wilds_pending,wilds_input_previous,wilds_input_actor,wilds_input_epoch;
+static MLObservation wilds_slide_draw_input;
 static unsigned wilds_focus_active;
 static float wilds_roll_tail,focus_lead_time,focus_strike_time;
 static unsigned wilds_roll_x,wilds_roll_input;
@@ -1389,11 +1390,16 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
     /* The native roll cancel can be evaluated between pad samples. Only
      * replace its sword request when X is held or buffered by that roll. */
     unsigned current=u16(a,STATE),current_action=u16(a,ACTION);
-    if(!world.move&&state==16&&!(byte(a,DRAWN)&1)&&!(raw.held&~ML_R)&&
-       ((raw.held==ML_R&&raw.magnitude>=50)||world.wilds_direction_pending)){
+    /* Start moving Spirit I only from the native draw-Spirit request.
+     * Sprint stays native even while the stick and R are held. */
+    if(!world.move&&state==16&&(action==20||action==21)&&!(byte(a,DRAWN)&1)){
         WObservation o={.base=raw,.state=current,.alive=1,.grounded=!(word(a,AIR)&0x400),
             .resources_ready=world_ready(a),.rank=crimson_available(a)?3:0};
-        if(w_sheathed_slide(&o))return 1;
+        if(w_sheathed_slide(&o)){
+            wilds_slide_draw_input=observe(a,1);
+            world_wilds_pending=W_SLIDE;
+            return 1;
+        }
     }
     unsigned red_roll=w_native_roll(current,current_action)||wilds_roll_tail>0;
     unsigned upper=state==16&&(action<=7||action==25||action==41);
@@ -2004,7 +2010,7 @@ static unsigned world_update(void *a,const MLObservation *b)
 #if ML_WILDS_MOVES
     if(world_bound&&(byte(a,DRAWN)&1)&&u16(a,MOTION)==0x500+world.slot&&
        ((world.source==917&&!world.red_foresight_chain&&real(a,FRAME)>=W_ROUND_SHEATHE_FRAME)||
-        (world.source==904&&real(a,FRAME)>=140))){
+        (world.source==904&&real(a,FRAME)>=W_RELEASE_SHEATHE_FRAME))){
         ((void (*)(void *,unsigned))(main_base+0x2a2560))(a,0);
         o.drawn=byte(a,DRAWN)&1;
         log_event("wilds_sheathed",(u32)(uptr)a,world.source,(u32)real(a,FRAME),byte(a,DRAWN));
@@ -2061,6 +2067,11 @@ static unsigned world_update(void *a,const MLObservation *b)
         if(mv==W_CHIJIN&&wilds_roll_input){
             request.base.input_heading=wilds_roll_heading;
             request.base.magnitude=wilds_roll_magnitude;
+        }
+        if(mv==W_SLIDE){
+            request.base.held=wilds_slide_draw_input.held;
+            request.base.input_heading=wilds_slide_draw_input.input_heading;
+            request.base.magnitude=wilds_slide_draw_input.magnitude;
         }
         wilds_roll_input=0;
         if(d.kind!=W_ENTER){

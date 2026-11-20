@@ -127,7 +127,7 @@ static unsigned attachment_pose(void *a,u32 role,float *out,u32 *joint,u32 *clos
     if(role==9&&wc){
         /* Once HunterBasic turns the weapon OFF, native placement owns the
          * closed blade on its scabbard. Do not reattach it to the hand. */
-        if(wc->source==904&&frame>=140)return 0;
+        if(wc->source==904&&frame>=W_RELEASE_SHEATHE_FRAME)return 0;
         unsigned n=(unsigned)frame;if(n>=wc->frames)n=wc->frames-1;
         unsigned next=n+1<wc->frames?n+1:n;float t=frame-(float)n;if(t>1)t=1;
         const float *x=weapon_samples[wc->offset+n],*y=weapon_samples[wc->offset+next];
@@ -225,11 +225,9 @@ static void seat_special_sheathe(void *a,float *pose,u32 *joint)
     *joint=parent;
 }
 #endif
-static unsigned equipment_joint_pose(void *a,void *o,unsigned joint,float *v)
+static unsigned attachment_relative_pose(const float *p,const float *m,float *v)
 {
-    const float *p=((const float *(*)(void *,u32))(*(uptr **)a)[0x54/4])(a,joint);
-    const float *m=(const float *)((uptr)o+0xb0);
-    if(!p)return 0;
+    if(!p||!m)return 0;
     float rot[9];
     for(unsigned i=0;i<3;++i){
         float x=p[i*4],y=p[i*4+1],z=p[i*4+2],nn=x*x+y*y+z*z;
@@ -244,6 +242,67 @@ static unsigned equipment_joint_pose(void *a,void *o,unsigned joint,float *v)
         q[i]=t*.25f;q[j]=(rot[3*i+j]+rot[3*j+i])/t;q[k]=(rot[3*i+k]+rot[3*k+i])/t;q[3]=(rot[3*k+j]-rot[3*j+k])/t;}
     return 1;
 }
+static unsigned equipment_joint_pose(void *a,void *o,unsigned joint,float *v)
+{
+    const float *parent=((const float *(*)(void *,u32))(*(uptr **)a)[0x54/4])(a,joint);
+    return attachment_relative_pose(parent,(const float *)((uptr)o+0xb0),v);
+}
+#if ML_WILDS_MOVES
+static void attachment_rotate(const float *q,const float *v,float *out)
+{
+    float point[4]={v[0],v[1],v[2],0},step[4],result[4],inverse[4]={-q[0],-q[1],-q[2],q[3]};
+    attachment_multiply(q,point,step);
+    attachment_multiply(step,inverse,result);
+    for(unsigned i=0;i<3;++i)out[i]=result[i];
+}
+/* MOT295 releases the hand constraint at F120 and closes at F140.
+ * The GU sword approaches its own scabbard, then seats along the blade axis. */
+static unsigned release_blade_seating(void *a,unsigned hand,float *pose,u32 *joint,u32 *closed)
+{
+    float frame=real(a,FRAME);
+    const void *scabbard=(const void *)(uptr)word(a,0x23a4);
+    if(!(frame>=W_RELEASE_SEAT_START&&frame<W_RELEASE_SHEATHE_FRAME)||
+       !scabbard||word(scabbard,0x13cc)!=2)return 0;
+    const float *rest=(const float *)((uptr)scabbard+0x40);
+    if(!(rest[8]>.01f&&rest[9]>.01f&&rest[10]>.01f))return 0;
+    float aligned[3];
+    const float axis[3]={0,0,-18.f};
+    attachment_rotate(rest+4,axis,aligned);
+    float t=1,depth=0;
+    if(frame<W_RELEASE_SEAT_ALIGN){
+        if(!hand)return 0;
+        const float *(*matrix)(void *,u32)=(const float *(*)(void *,u32))(*(uptr **)a)[0x54/4];
+        float relative[7],point[3],rotation[4];
+        if(!attachment_relative_pose(matrix(a,2),matrix(a,12),relative))return 0;
+        attachment_rotate(relative+3,pose,point);
+        attachment_multiply(relative+3,pose+4,rotation);
+        for(unsigned i=0;i<3;++i)pose[i]=relative[i]+point[i];
+        for(unsigned i=0;i<4;++i)pose[4+i]=rotation[i];
+        t=(frame-W_RELEASE_SEAT_START)/(W_RELEASE_SEAT_ALIGN-W_RELEASE_SEAT_START);
+        t=t*t*(3-2*t);
+        depth=1;
+    }else{
+        for(unsigned i=0;i<12;++i)pose[i]=rest[i];
+        float insert=(frame-W_RELEASE_SEAT_ALIGN)/(W_RELEASE_SHEATHE_FRAME-W_RELEASE_SEAT_ALIGN);
+        depth=1-insert*insert*(3-2*insert);
+    }
+    for(unsigned i=0;i<3;++i)pose[i]+=t*(rest[i]+depth*aligned[i]-pose[i]);
+    if(t<1){
+        float dot=0,length=0;
+        for(unsigned i=0;i<4;++i)dot+=pose[4+i]*rest[4+i];
+        for(unsigned i=0;i<4;++i){
+            pose[4+i]=pose[4+i]*(1-t)+(dot<0?-t:t)*rest[4+i];
+            length+=pose[4+i]*pose[4+i];
+        }
+        if(!(length>.00001f))return 0;
+        float norm=att_sqrt(length);
+        for(unsigned i=0;i<4;++i)pose[4+i]/=norm;
+        for(unsigned i=8;i<11;++i)pose[i]+=t*(rest[i]-pose[i]);
+    }
+    *joint=2;*closed=0;
+    return 1;
+}
+#endif
 static unsigned holster_pose(void *a,void *o,unsigned ix,unsigned prior,float *out,u32 *joint,u32 *closed)
 {
     float f=real(a,FRAME);
@@ -353,7 +412,11 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
 #if ML_WILDS_MOVES
     if(role==9&&!private_pose)handoff.actor=0;
 #endif
-    if(wilds_back||attachment_pose(a,role,pose,&joint,&closed))holster[ix].object=0;
+    unsigned posed=wilds_back||attachment_pose(a,role,pose,&joint,&closed);
+#if ML_WILDS_MOVES
+    if(role==9&&motion==0x500+250&&release_blade_seating(a,posed,pose,&joint,&closed))posed=1;
+#endif
+    if(posed)holster[ix].object=0;
     else if(!holster_pose(a,object,ix,prior,pose,&joint,&closed))return result;
 #if ML_WILDS_MOVES
     if(role==9&&motion==0x500+230&&closed)seat_special_sheathe(a,pose,&joint);
@@ -395,7 +458,7 @@ static u32 preview_equipment_motion(void *object,u32 owner,u32 c,u32 d)
         for(unsigned i=0;i<sizeof(wilds_clips)/sizeof(*wilds_clips);++i)
             if(motion==0x500+wilds_clips[i].slot){wilds=1;break;}
         if(wilds||focus_walk_clip(motion)){
-            unsigned closed=motion==0x500+250&&frame>=140;
+            unsigned closed=motion==0x500+250&&frame>=W_RELEASE_SHEATHE_FRAME;
             if(u16(object,0x5f4)!=0xffffu)
                 ((NativeLayer)(main_base+0x954640))(object,1,0xffffu,0,0,0,1);
             if(u16(object,MOTION)!=(closed?0:1))

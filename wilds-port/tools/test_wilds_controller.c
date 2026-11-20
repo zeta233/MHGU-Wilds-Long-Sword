@@ -125,6 +125,31 @@ static void red_x_recovery(void)
  assert(world_command_step(&s,&o,0,NULL).move==W_THRUST);
 }
 
+static void directional_spirit(void)
+{
+ WObservation o=obs();WState s={0};
+ o.drawn=0;o.state=2;o.base.native_action=2;o.base.magnitude=100;
+ o.base.held=ML_R;
+ assert(!w_sheathed_slide(&o)&&w_wilds_enter(&s,&o,W_SLIDE).kind==W_KEEP);
+ o.base.held=ML_R|ML_X|ML_A;
+ assert(w_sheathed_slide(&o)&&w_wilds_enter(&s,&o,W_SLIDE).move==W_SLIDE);
+ o.base.magnitude=0;
+ assert(!w_sheathed_slide(&o));
+ o=obs();o.rank=2;o.base.magnitude=100;
+ s=(WState){.move=W_CHARGE,.source=915,.wilds_stage=2,.wilds_previous=ML_R};
+ WDecision d=tick(&s,&o,0,50);
+ assert(d.move==W_SLIDE&&d.source==W_SPIRIT_TWO_FORWARD&&d.gauge_delta==-15);
+
+ for(unsigned direction=0;direction<2;direction++){
+  o=obs();o.rank=2;o.base.magnitude=direction?100:0;
+  s=(WState){.move=W_CHARGE,.source=902,.wilds_stage=3};
+  assert(tick(&s,&o,ML_R,95).kind==W_KEEP);
+  o.base.simulation_delta=6;
+  d=tick(&s,&o,0,105);
+  assert(d.source==(direction?903:917)&&d.gauge_delta==(direction?-10:-25));
+ }
+}
+
 static void charge_routes(void)
 {
  const unsigned sources[]={901,920,921,906,907,903,910,911,912,922,923,924,925,902,914,927,928,929,930};
@@ -174,6 +199,7 @@ static void short_spirit_costs(void)
 int main(void){
  valor_routes();
  red_x_recovery();
+ directional_spirit();
  charge_routes();
  short_spirit_costs();
  iai_held_entry();
