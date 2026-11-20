@@ -124,9 +124,23 @@ static inline unsigned w_ordinary_charge_source(unsigned source)
 }
 unsigned w_guild_attack(unsigned action);
 unsigned w_guild_source(unsigned state,unsigned action,unsigned motion);
+static inline unsigned w_native_spirit_one(unsigned state,unsigned action)
+{
+    /* Standing Spirit I (16/17) and the powered/weak draw entries (20/21)
+     * all reach the same striking clip after their native preparation. */
+    return state==16&&(action==16||action==17||action==20||action==21);
+}
 static inline unsigned w_spirit_one_crimson_source(unsigned state,unsigned action,unsigned motion)
 {
-    return (action==16||action==17)&&w_guild_source(state,action,motion)==104;
+    return w_native_spirit_one(state,action)&&w_guild_source(state,action,motion)==104;
+}
+static inline unsigned w_ground_step_move(unsigned move)
+{
+    return move>=W_FORESIGHT&&move<=W_FOCUS&&(move<W_RISE||move>W_DOWN);
+}
+static inline unsigned w_ground_step_height(float drop)
+{
+    return drop>=-.5f&&drop<=120.f;
 }
 unsigned w_guild_spirit_opener(unsigned action,unsigned motion,unsigned previous);
 unsigned w_private(unsigned state,unsigned action);

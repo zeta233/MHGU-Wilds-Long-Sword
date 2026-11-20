@@ -150,6 +150,32 @@ static void directional_spirit(void)
  }
 }
 
+static void draw_and_floor_routes(void)
+{
+ for(unsigned action=20;action<=21;action++){
+  WObservation o=obs();WState s={0};
+  o.base.native_action=action;o.base.motion=0x57e;o.base.held=ML_X;
+  assert(world_command_step(&s,&o,0,NULL).kind==W_KEEP);
+  o.base.motion=0x568;o.base.held=0;o.base.animation_frame=55;
+  o.base.sample_sequence++;
+  assert(world_command_step(&s,&o,104,w_event(104,55)).kind==W_KEEP);
+  o.base.animation_frame=56;o.base.sample_sequence++;
+  assert(world_command_step(&s,&o,104,w_event(104,56)).source==W_CRIMSON_STATIONARY);
+ }
+ for(unsigned move=W_FORESIGHT;move<=W_FOCUS;move++)
+  assert(w_ground_step_move(move)==(move<W_RISE||move>W_DOWN));
+ const float steps[]={-.6f,-.5f,0.f,29.f,30.f,72.f,120.f,120.1f,180.f};
+ for(unsigned i=0;i<sizeof(steps)/sizeof(*steps);i++)
+  assert(w_ground_step_height(steps[i])==(i>0&&i<7));
+ WObservation o=obs();WState s={0};
+ WDecision d=w_debug_enter(&s,&o,W_LAND);
+ s.actor=1;s.epoch=1;s.helm_cost_pending=1;s.rank=2;
+ o.state=4;o.grounded=0;o.base.native_action=1;o.base.motion=0x500+d.slot;
+ d=w_step(&s,&o);
+ assert(d.kind==W_ABORT&&d.rank_delta==-1&&!s.move);
+ assert(!w_step(&s,&o).rank_delta);
+}
+
 static void charge_routes(void)
 {
  const unsigned sources[]={901,920,921,906,907,903,910,911,912,922,923,924,925,902,914,927,928,929,930};
@@ -191,7 +217,7 @@ static void short_spirit_costs(void)
   o.base.sample_sequence++;o.base.held=0;o.base.gauge=costs[i]-1+paid;
   WDecision d=wilds_bridge(&s,&o,sources[i]);
   if(!paid)assert(d.kind==W_KEEP);
-  else if(i==2)assert(d.source==916&&d.gauge_delta==-25);
+  else if(i==2)assert(d.source==917&&d.gauge_delta==-25);
   else assert(d.kind==W_NATIVE&&d.native_action==(i==0?23:26));
   assert(!s.wilds_r_pending);
  }
@@ -200,6 +226,7 @@ int main(void){
  valor_routes();
  red_x_recovery();
  directional_spirit();
+ draw_and_floor_routes();
  charge_routes();
  short_spirit_costs();
  iai_held_entry();
@@ -250,7 +277,7 @@ int main(void){
  for(unsigned stage=2;stage<=4;stage++){
   o=obs();o.base.held=ML_R;w_reset(&s);wilds_charge(&s,&o,stage);
   s.wilds_elapsed=.4f;d=tick(&s,&o,0,30);
-  assert(stage==2?(d.kind==W_NATIVE&&d.native_action==23):d.source==(stage==3?902:916));
+  assert(stage==2?(d.kind==W_NATIVE&&d.native_action==23):d.source==(stage==3?902:917));
  }
  o=obs();w_reset(&s);w_wilds_enter(&s,&o,W_SLIDE);
  tick(&s,&o,ML_R,60);o.base.simulation_delta=7;assert(tick(&s,&o,ML_R,67).kind==W_KEEP);
@@ -296,7 +323,7 @@ int main(void){
  o=obs();w_reset(&s);o.base.held=ML_R;o.base.animation_frame=95;o.base.sample_sequence=1;
  assert(wilds_bridge(&s,&o,108).kind==W_KEEP);
  o.base.held=0;o.base.animation_frame=110;o.base.sample_sequence++;
- d=wilds_bridge(&s,&o,108);assert(d.kind==W_ENTER&&d.source==916&&s.move==W_CHARGE);
+ d=wilds_bridge(&s,&o,108);assert(d.kind==W_ENTER&&d.source==917&&s.move==W_CHARGE);
  o=obs();o.base.held=ML_R;w_reset(&s);wilds_charge(&s,&o,2);
  assert(tick(&s,&o,ML_B,10).kind==W_ROLL);
  /* A direction is not a chord button: wait for B before committing R. */
@@ -314,13 +341,13 @@ int main(void){
  d=w_wilds_enter(&s,&o,W_RELEASE);assert(d.heading==1234);
  o=obs();w_reset(&s);wilds_round(&s,&o);wilds_phase(&s,&o,917);
  o.base.magnitude=100;
- assert(tick(&s,&o,0,110).kind==W_KEEP);
- assert(tick(&s,&o,0,175).kind==W_IDLE);
+ assert(tick(&s,&o,0,wilds_clip(917)->frames-2).kind==W_KEEP);
+ assert(tick(&s,&o,0,wilds_clip(917)->frames-1).kind==W_IDLE);
  /* A closed weapon during the authored recovery is not an interruption. */
  o=obs();w_reset(&s);wilds_round(&s,&o);wilds_phase(&s,&o,917);
- s.actor=1;s.epoch=1;o.drawn=0;o.base.motion=0x500+s.slot;o.base.native_action=w_action(s.move);o.base.animation_frame=151;
+ s.actor=1;s.epoch=1;o.drawn=0;o.base.motion=0x500+s.slot;o.base.native_action=w_action(s.move);o.base.animation_frame=W_ROUND_SHEATHE_FRAME;
  d=w_step(&s,&o);assert(d.kind==W_KEEP&&s.source==917);
- o.base.animation_frame=175;o.base.sample_sequence++;assert(w_step(&s,&o).kind==W_IDLE);
+ o.base.animation_frame=wilds_clip(917)->frames-1;o.base.sample_sequence++;assert(w_step(&s,&o).kind==W_IDLE);
  for(unsigned rank=0;rank<4;rank++){
   o=obs();o.rank=rank;w_reset(&s);w_debug_enter(&s,&o,W_BIG);
   s.actor=1;s.epoch=1;o.base.motion=0x500+s.slot;o.base.native_action=w_action(s.move);o.base.animation_frame=37;o.counter=1;
@@ -433,12 +460,19 @@ int main(void){
  assert(d.kind==W_KEEP&&!d.rank_delta&&s.hit_success);
  s.wilds_focus_break=1;o.base.sample_sequence++;
  d=w_step(&s,&o);
- assert(d.kind==W_MOTION&&d.source==913&&d.rank_delta==1);
+ assert(d.kind==W_MOTION&&d.source==913&&!d.rank_delta);
  o.base.motion=0x500+d.slot;o.base.animation_frame=83;o.base.sample_sequence++;
  assert(w_step(&s,&o).kind==W_KEEP);
  o.base.animation_frame=84;o.base.sample_sequence++;
  d=w_step(&s,&o);
  assert(d.kind==W_MOTION&&d.source==914&&!d.rank_delta);
+ o.base.motion=0x500+d.slot;o.base.animation_frame=wilds_clip(914)->recovery-1;
+ o.base.sample_sequence++;d=w_step(&s,&o);
+ assert(d.kind==W_KEEP&&!d.rank_delta);
+ o.base.animation_frame++;o.base.sample_sequence++;
+ d=w_step(&s,&o);assert(d.kind==W_IDLE&&d.rank_delta==1);
+ o.base.sample_sequence++;assert(!w_step(&s,&o).rank_delta);
+
  puts("PASS: chains, holds, chords, sheath recovery, Iai, red draw, five Spirit I branches, red Foresight");
 }
 

@@ -1549,21 +1549,19 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
 
 #endif
     if(world_floor_depth&&world_air_owner(a)&&state==64&&action==33)return 1;
-    /* GU has already queried the floor at the new X/Z. Its normal snap
-     * ends at 30 units; extend only the bound Foresight's ordinary fall. */
-    unsigned ground_step=world.move==W_FORESIGHT&&world_floor_depth;
-#if ML_WILDS_MOVES
-    ground_step|=wilds_clip(world.source)!=0;
-#endif
-    if(ground_step&&world_bound&&world_bound_actor==(u32)(uptr)a&&
+    /* Only the native floor solver may resolve a short step under a
+     * bound ground attack. Damage, true falls and Helm retain their paths. */
+    if(world_floor_depth&&!world_damage_depth&&w_ground_step_move(world.move)&&
+       world_bound&&world_bound_actor==(u32)(uptr)a&&
        u16(a,STATE)==16&&u16(a,ACTION)==w_action(world.move)&&u16(a,MOTION)==0x500+world.slot&&
        state==4&&action==1){
         float floor=real(a,0x10f0),drop=real(a,0x44)-floor;
-        log_event("wilds_ground_step_query",(u32)(uptr)a,world.source,(u32)(drop*100),world_floor_depth);
-        if(drop>=-.5f&&drop<=120){
+        if(w_ground_step_height(drop)){
             set_real(a,0x44,floor);set_real(a,0x1014,0);
+            put(a,AIR,word(a,AIR)&~0x400u);
             *(unsigned char *)((uptr)a+0x2505)=0;
-            log_event("world_step_down",(u32)(uptr)a,(u32)(drop*100),action,(u32)real(a,FRAME));return 1;
+            log_event("world_step_down",(u32)(uptr)a,(u32)(drop*100),action,(u32)real(a,FRAME));
+            return 1;
         }
     }
     if(world_damage_depth&&world_armor>0&&(int16_t)u16(a,HP)>0&&
@@ -1756,7 +1754,7 @@ static unsigned world_update(void *a,const MLObservation *b)
     {
      unsigned state=u16(a,STATE),action=u16(a,ACTION),mv=0;
      unsigned ready=!world.move&&(byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&
-        !w_spirit_one_crimson_source(state,action,b->motion)&&
+        !w_native_spirit_one(state,action)&&
         (int16_t)u16(a,HP)>0&&world_ready(a)&&b->simulation_delta>0&&
         (((state==1||state==2)&&action<=5)||(state==16&&action<154&&real(a,FRAME)>=24));
      unsigned rolling=w_native_roll(state,action);

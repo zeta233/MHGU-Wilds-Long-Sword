@@ -238,8 +238,8 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
     /* Native recovery owns the cancel window. Capture X before GU can
      * queue a regular thrust or mistake the tail of Spirit I's R for a chord. */
     unsigned spirit_one=!s->move&&w_spirit_one_crimson_source(o->state,b->native_action,b->motion);
-    unsigned prep=!s->move&&o->state==16&&(b->native_action==16||b->native_action==17)&&
-        !spirit_one;
+    unsigned native_spirit=!s->move&&w_native_spirit_one(o->state,b->native_action);
+    unsigned prep=native_spirit&&!spirit_one;
     unsigned red_native=!s->move&&o->rank==3&&o->grounded&&o->state==16&&
         (spirit_one||prep||w_valor_chord(o->state,b->native_action,b->motion,100000.f,ML_X,0)==W_CHIJIN);
     unsigned previous=s->spirit_crimson_held;
@@ -272,7 +272,7 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
             return d;
         }
     }else if(!s->move&&!s->spirit_crimson_repeat&&
-             !(carried&&o->state==16&&(b->native_action==16||b->native_action==17))){
+             !(carried&&native_spirit)){
         s->spirit_crimson_pending=0;
     }
     if(red_native&&o->valor_move==W_CHIJIN)return (WDecision){0};

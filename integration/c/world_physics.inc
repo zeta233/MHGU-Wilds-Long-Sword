@@ -112,12 +112,8 @@ static u32 world_floor(void *a,u32 b,u32 c,u32 d)
 #if ML_WILDS_MOVES
     world_focus_walk_pose(a);
 #endif
-    unsigned ground=world.move==W_FORESIGHT;
-#if ML_WILDS_MOVES
-    ground|=wilds_clip(world.source)!=0;
-#endif
     unsigned owned=local_supported(a)&&world.actor==(u32)(uptr)a&&world.move&&
-        world.epoch==byte(a,AREA)&&(world_air_owner(a)||ground);
+        world.epoch==byte(a,AREA)&&(world_air_owner(a)||w_ground_step_move(world.move));
     if(!owned)return world_original_floor(a,b,c,d);
     world_physics_tick(a);++world_floor_depth;
     u32 result=world_original_floor(a,b,c,d);
