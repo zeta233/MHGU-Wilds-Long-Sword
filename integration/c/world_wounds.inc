@@ -1,14 +1,14 @@
-/* Keep GU's part IDs and damage accounting. A wound is attached to the
- * current hurt volume of the part that filled its wound threshold. */
+/* GU owns part IDs and damage. Keep the opening contact in the hit
+ * bone's space so the effect follows the same spot as the monster poses. */
 enum { WOUND_MONSTERS=10, WOUND_PARTS=8, WOUND_MARKERS=12 };
 typedef struct {
     unsigned progress;
     float until,recover,flash;
     const void *part_table;
     unsigned part_index;
-    float fraction;
+    int bone;
+    float local[3];
     unsigned burst_damage,burst_shown;
-    float burst_offset[3];
 } WWound;
 typedef struct {
     void *target,*status;
@@ -122,23 +122,11 @@ static const void *world_wound_part_table(void *target)
 {
     return ((const void *(*)(void *))(main_base+0x710b0))(target);
 }
-static const void *world_wound_volume(const void *manager,const void *status,unsigned part)
+/* Evaluate the row itself. The native collision pool omits disabled rows,
+ * so an index into the part table is not necessarily its index in that pool. */
+static unsigned world_wound_pose(void *target,const void *part,float *posed)
 {
-    unsigned first=word(status,0x500);
-    if(!manager||first>=256||part>=256-first)return 0;
-    const void *v=(const void *)((uptr)manager+0x1c+(first+part)*32);
-    unsigned type=byte(v,0);
-    return type>=1&&type<=3&&real(v,4)>0?v:0;
-}
-/* Mirror GU's 16ae40 hurt-part descriptor, but evaluate it against the
- * current pose when the camera draws. The collision pool may be a tick old. */
-static unsigned world_wound_position(void *target,const WWound *w,float *p)
-{
-    if(!w->part_table||world_wound_part_table(target)!=w->part_table)return 0;
-    const void *part=(const void *)((uptr)w->part_table+44*w->part_index);
-    if(((unsigned (*)(void *,unsigned))(*(uptr **)target)[0x370/4])(target,u16(part,12)))return 0;
     _Alignas(16) unsigned descriptor[16]={0};
-    _Alignas(16) float posed[12]={0};
     descriptor[0]=word(part,0);
     descriptor[1]=u16(part,4)|(((u16(part,10)>>12)&1u)<<16);
     descriptor[2]=word(part,16);
@@ -147,35 +135,49 @@ static unsigned world_wound_position(void *target,const WWound *w,float *p)
         descriptor[8+k]=word(part,32+4*k);
     }
     descriptor[12]=1;set_real(descriptor,52,1.f);
-    unsigned type=((unsigned (*)(unsigned,void *,const void *,float *))(main_base+0x16de70))
+    return ((unsigned (*)(unsigned,void *,const void *,float *))(main_base+0x16de70))
         (1,target,descriptor,posed);
-    if(type<1||type>3||!(posed[8]>0))return 0;
+}
+
+static unsigned world_wound_position(void *target,const WWound *w,float *p)
+{
+    if(!w->part_table||world_wound_part_table(target)!=w->part_table)return 0;
+    const void *part=(const void *)((uptr)w->part_table+44*w->part_index);
+    if(((unsigned (*)(void *,unsigned))(*(uptr **)target)[0x370/4])(target,u16(part,12)))return 0;
+    const float *m=world_bone(target,w->bone);
+    if(!m)return 0;
     for(unsigned k=0;k<3;++k)
-        p[k]=type==1?posed[k]:posed[k]+(posed[4+k]-posed[k])*w->fraction;
+        p[k]=m[12+k]+m[k]*w->local[0]+m[4+k]*w->local[1]+m[8+k]*w->local[2];
     return 1;
 }
-static void world_wound_anchor(WWound *w,void *manager,void *target,void *status,
-                               const void *part,const float *point)
+
+static void world_wound_anchor(WWound *w,void *target,const void *part,const float *point)
 {
     w->part_table=0;
     const void *table=world_wound_part_table(target);
     if(!table||(uptr)part<(uptr)table)return;
-    unsigned offset=(uptr)part-(uptr)table,index=offset/44;
+    unsigned offset=(uptr)part-(uptr)table;
     if(offset%44)return;
-    const void *v=world_wound_volume(manager,status,index);
-    if(!v)return;
-    float fraction=0;
-    if(byte(v,0)!=1){
-        float dot=0,length2=0;
-        for(unsigned k=0;k<3;++k){
-            float start=real(v,8+4*k),axis=real(v,20+4*k)-start;
-            dot+=(point[k]-start)*axis;length2+=axis*axis;
+    int bone=(int16_t)u16(part,0);
+    if(bone==255)bone=-1;
+    /* GU type 2 joins separate bones. Choose the end nearest the opening
+     * contact once, so subsequent animation cannot move the mark to the
+     * other end. Type 1 already uses the first bone for both ends. */
+    if(u16(part,4)==2&&bone>=0){
+        _Alignas(16) float posed[12]={0};
+        int other=(int16_t)u16(part,2);
+        if(other>=0&&other!=255&&other!=bone&&world_wound_pose(target,part,posed)==2){
+            float first=0,second=0;
+            for(unsigned k=0;k<3;++k){
+                float a=point[k]-posed[k],b=point[k]-posed[4+k];
+                first+=a*a;second+=b*b;
+            }
+            if(second<first)bone=other;
         }
-        if(length2>.0001f)fraction=dot/length2;
-        if(fraction<0)fraction=0;
-        if(fraction>1)fraction=1;
     }
-    w->part_index=index;w->fraction=fraction;w->part_table=table;
+    const float *m=world_bone(target,bone);
+    if(!m||!world_inverse(m,point,w->local))return;
+    w->bone=bone;w->part_index=offset/44;w->part_table=table;
 }
 
 /* Settle the reserved wound once the directional finisher closes its last hitbox. */
@@ -204,9 +206,7 @@ static void world_finish_focus_burst(void *actor,float frame)
     w->flash=world_elapsed+.85f;w->burst_shown=0;
 #if ML_WORLD_PRESENTATION
     float pos[3];
-    if(!world_wound_position(target,w,pos))
-        for(unsigned k=0;k<3;++k)pos[k]=real(target,0x40+k*4)+w->burst_offset[k];
-    world_helm_impact(actor,pos);
+    if(world_wound_position(target,w,pos))world_helm_impact(actor,pos);
 #endif
     log_event("wilds_wound_burst",region,world.source,bonus,w->burst_damage);
 }
@@ -270,7 +270,6 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
         focus_burst.target=target;focus_burst.status=status;focus_burst.slot=slot;
         focus_burst.actor=world.actor;focus_burst.area=byte(target,AREA);
         focus_burst.id=id;focus_burst.region=region;focus_burst.bonus=bonus;
-        for(unsigned k=0;k<3;++k)w->burst_offset[k]=real(point,k*4)-real(target,0x40+k*4);
         wound_recoil.target=target;wound_recoil.status=status;wound_recoil.area=byte(target,AREA);
         wound_recoil.region=region;wound_recoil.until=world_elapsed+.25f;
 #if ML_WORLD_PRESENTATION
@@ -286,7 +285,7 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
     unsigned opening=(threshold*65+99)/100;if(opening<24)opening=24;
     w->progress+=damage;
     if(w->progress>=opening){
-        world_wound_anchor(w,manager,target,status,part,(const float *)point);
+        world_wound_anchor(w,target,part,(const float *)point);
         w->until=world_elapsed+90;
         log_event("wilds_wound_open",world.actor,(u32)(uptr)target,region,w->progress);
     }
@@ -317,10 +316,7 @@ static void world_wound_markers(void *a,void *camera)
                 aiming&&w->until>world_elapsed&&(int)word(m->status,0x370)>0?1:0;
             if(!kind)continue;
             float p[3],screen[4];
-            if(!world_wound_position(m->target,w,p)){
-                if(kind!=2)continue;
-                for(unsigned k=0;k<3;++k)p[k]=real(m->target,0x40+k*4)+w->burst_offset[k];
-            }
+            if(!world_wound_position(m->target,w,p))continue;
             /* Use the same active viewport projection as the native HUD.
              * It returns a 1280x720 logical position and clip visibility. */
             ((void (*)(float *,const float *,unsigned))(main_base+0x551340))(screen,p,view);
