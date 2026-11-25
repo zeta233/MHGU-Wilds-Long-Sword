@@ -8,6 +8,11 @@
 
 [下载完整包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/latest) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
 
+## v0.262 更新
+
+- 增幅护腕最多储存三格充能。光辉纳刀每次消耗一格完整储备并刷新增幅时间，增幅期间储备足够即可再次发动。
+- 增幅期间，橙色三格显示剩余时间，下方蓝条显示充能储备。Windows Recomp 已复测满储备连续发动三次及耗尽后的输入。
+
 ## v0.261 更新
 
 - 修复 Windows Recomp 超宽屏下 `R3` 锁定提示与原生 HUD 的错位。超宽屏边缘定位需要同时安装新版模组与后处理补丁。

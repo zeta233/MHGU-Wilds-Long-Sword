@@ -1,12 +1,12 @@
 /* Optional Guild-only prototype. The stock build omits this controller. */
-enum { PAD_BOOST=0x2, BOOST_CAPACITY=100, BOOST_HIT=12, BOOST_WOUND=30,
+enum { PAD_BOOST=0x2, BOOST_COST=100, BOOST_CAPACITY=3*BOOST_COST, BOOST_HIT=12, BOOST_WOUND=30,
        BOOST_DURATION=25*60, BOOST_SHEATHE_WINDOW=60, RADIANCE_INPUT=ML_X|ML_A, RADIANCE_STAMINA=0x13e0 };
 enum { RADIANCE_OFF,RADIANCE_HOLD,RADIANCE_RELEASE,RADIANCE_FLASH,RADIANCE_CHASE,RADIANCE_FOLLOW };
 enum { DIV_INPUT_NONE, DIV_INPUT_SPIRIT_HELD, DIV_INPUT_ROUND, DIV_INPUT_SHEATHE, DIV_INPUT_ROLL, DIV_INPUT_PRIMARY, DIV_INPUT_SECONDARY, DIV_INPUT_FADE, DIV_INPUT_THRUST, DIV_INPUT_FORESIGHT, DIV_INPUT_CHARGE };
 static struct {
     void *actor;
     unsigned area,sample,charge,sheathe,enhanced_iai;
-    unsigned radiance,radiance_used,radiance_hit,radiance_sample;
+    unsigned radiance,rt_cancel_pending,radiance_hit,radiance_sample;
     float remaining,ready_frames;
     unsigned musou_sheathe_r,flash_r_buffered;
     float walk_speed;
@@ -20,7 +20,7 @@ static struct {
     unsigned dividing_step_pending,dividing_step_heading,dividing_step_sample;
     float dividing_hold_ticks,dividing_travel_frame;
     unsigned flash_step_release;
-    unsigned double_resheathe_step,rt_cancel_pending;
+    unsigned double_resheathe_step;
 } ascendance;
 
 /* Pursuit follows the particular monster whose native reaction accepted
@@ -222,7 +222,7 @@ static void ascendance_hit(void *a,const void *attack,void *target,unsigned woun
     }
     if(damage&&world.move==W_BIG&&!musou.phase)
         log_event("ascendance_iai_damage",(u32)(uptr)a,world.source,damage,ascendance.enhanced_iai);
-    if(ascendance.remaining>0||ascendance.charge==BOOST_CAPACITY)return;
+    if((!wound&&!damage)||ascendance.charge==BOOST_CAPACITY)return;
     unsigned next=ascendance.charge+(wound?BOOST_WOUND:BOOST_HIT);
     ascendance.charge=next>BOOST_CAPACITY?BOOST_CAPACITY:next;
     log_event("ascendance_charge",(u32)(uptr)a,ascendance.charge,wound,damage);
@@ -339,10 +339,16 @@ static void ascendance_sheathe_pose_tick(void *a,const WObservation *o)
 }
 static unsigned ascendance_radiance_available(void *a)
 {
-    return ascendance_owner(a)&&!ascendance.radiance_used&&!ascendance.radiance&&
+    return ascendance_owner(a)&&!ascendance.radiance&&
         !musou.phase&&!ascendance.double_cut&&hunter_style(a)==0&&
-        (ascendance.remaining>0||ascendance.charge==BOOST_CAPACITY)&&
+        ascendance.charge>=BOOST_COST&&
         (byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&(int16_t)u16(a,HP)>0;
+}
+
+static void ascendance_spend_reserve(void)
+{
+    ascendance.charge-=BOOST_COST;
+    ascendance.remaining=BOOST_DURATION;
 }
 
 static unsigned ascendance_independent_flash(void)
@@ -1924,12 +1930,11 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
                 d.motion_contract=1;d.blend=8;d.speed=1;
             }
             if(ascendance.remaining<=0){
-                ascendance.charge=0;
-                ascendance.remaining=BOOST_DURATION;
                 log_event("ascendance_start",(u32)(uptr)a,25,0,1);
             }
+            ascendance_spend_reserve();
             ascendance.radiance=RADIANCE_HOLD;
-            ascendance.radiance_used=1;
+            ascendance.rt_cancel_pending=0;
             ascendance.flash_step_release=0;
             ascendance.radiance_hit=0;
             ascendance.flash_r_buffered=0;
@@ -2021,7 +2026,7 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
                 ascendance.remaining-=b->simulation_delta;
                 if(ascendance.remaining<=0){
                     ascendance.remaining=0;
-                    ascendance.sheathe=ascendance.radiance_used=0;
+                    ascendance.sheathe=0;
                     log_event("ascendance_end",(u32)(uptr)a,0,0,0);
                 }
             }
@@ -2060,15 +2065,14 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
         if(ascendance.remaining>0&&idle){
             ascendance.rt_cancel_pending=solo_ascendance_rt(a);
             cancel=!ascendance.rt_cancel_pending;
-        }else if(ascendance.charge==BOOST_CAPACITY){
-            ascendance.charge=0;ascendance.remaining=BOOST_DURATION;
+        }else if(ascendance.charge>=BOOST_COST){
+            ascendance_spend_reserve();
             /* The current sheathe and its native clock continue through ignition. */
             log_event("ascendance_start",(u32)(uptr)a,25,ordinary_sheathe,ordinary_sheathe?(u32)b->animation_frame:0);
         }
     }
     if(cancel){
         ascendance.remaining=0;
-        ascendance.radiance_used=0;
         log_event("ascendance_end",(u32)(uptr)a,1,0,0);
     }
     unsigned active=ascendance.remaining>0;
@@ -2084,7 +2088,7 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
     ready|=ascendance_flash_link(a,o)&&o->base.animation_frame>=FLASH_MUSOU_BRANCH&&
         !ascendance_flash_chase_target(a,&dx,&dz);
     unsigned musou_hint=musou.phase?2u:ready;
-    unsigned rt_prompt=!active&&ascendance.charge==BOOST_CAPACITY&&solo_ascendance_rt(a);
+    unsigned rt_prompt=!active&&ascendance.charge>=BOOST_COST&&solo_ascendance_rt(a);
     ml_ascendance_gauge(1|(active<<1)|(enhanced<<2)|(radiance<<3)|(pursue<<4)|
-        (musou_hint<<5)|(rt_prompt<<7)|((active?remaining:ascendance.charge)<<8));
+        (musou_hint<<5)|(rt_prompt<<7)|(remaining<<8)|(ascendance.charge<<16));
 }

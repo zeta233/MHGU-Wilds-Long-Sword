@@ -38,8 +38,9 @@ pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
     let charging = state & 8 != 0;
     let chase = state & 16 != 0;
     let musou = (state >> 5) & 3;
-    let fraction = (state >> 8).min(100) as f32 / 100.0;
-    let ready = !active && fraction >= 1.0;
+    let fraction = ((state >> 8) & 255).min(100) as f32 / 100.0;
+    let reserve = (state >> 16).min(300) as f32 / 100.0;
+    let ready = !active && reserve >= 1.0;
     let warning = active && fraction < 0.23;
     let phase = (item::get_time()*1.8) as f32;
     let wave = 1.0-(2.0*(phase-phase as u32 as f32)-1.0).abs();
@@ -125,8 +126,9 @@ pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
             point(x+12.0,20.0),point(x+2.0,17.0),point(x,12.0),
         ];
         dl.add_convex_poly_filled(&trim,RECESS);
-        let part=(fraction*3.0-cell as f32).clamp(0.0,1.0);
-        let rim = if ready { RIM } else if active && part>0.0 {
+        let stored = (reserve-cell as f32).clamp(0.0,1.0);
+        let part = if active { (fraction*3.0-cell as f32).clamp(0.0,1.0) } else { stored };
+        let rim = if !active && stored>=1.0 { RIM } else if active && part>0.0 {
             color(226,157,78,240)
         } else { METAL };
         border(dl,&trim,rim,0.66*scale);
@@ -146,6 +148,13 @@ pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
             if part>=0.995 {
                 dl.add_triangle_filled(point(x+6.5,8.5),point(x+15.2,8.5),
                     point(x+10.0,13.8),facet);
+            }
+        }
+        if active {
+            dl.add_rect_filled(point(x+1.0,21.0),point(x+19.0,23.0),color(31,59,90,235),0.0);
+            if stored>0.0 {
+                let tint = if stored>=1.0 { color(119,210,255,255) } else { color(59,157,220,255) };
+                dl.add_rect_filled(point(x+1.0,21.0),point(x+1.0+18.0*stored,23.0),tint,0.0);
             }
         }
     }
