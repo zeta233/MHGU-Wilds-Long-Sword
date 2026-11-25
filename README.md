@@ -8,6 +8,8 @@
 
 [下载完整包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/latest) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
 
+Android MHGU Recomp 0.20.0 可通过 Files 页导入安卓兼容测试包。 [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
+
 ## v0.262 更新
 
 - 增幅护腕最多储存三格充能。光辉纳刀每次消耗一格完整储备并刷新增幅时间，增幅期间储备足够即可再次发动。
@@ -102,6 +104,8 @@
 ```powershell
 .\scripts\build.ps1
 ```
+
+安卓 Recomp 插件使用 `.\scripts\build.ps1 -Platform Android` 构建。
 
 输出为 integration/mhw_ls_rebuild.nro，安装位置为 Wilds-LS-World/romfs/nativeNX/plugins/。integration/c 包含战斗与输入逻辑和编译所需的生成表，integration/src 包含 Rust 入口。
 

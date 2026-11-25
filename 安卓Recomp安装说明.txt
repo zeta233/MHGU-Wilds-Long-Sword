@@ -1,0 +1,23 @@
+荒野太刀 · 凌越扩展 v0.262｜Android MHGU Recomp 兼容测试包
+
+适用环境
+
+面向 morerokk 的 Android MHGU Recomp 0.20.0，游戏数据版本为 MHGU 1.4.0。
+Recomp 自带 Forge 插件加载器。本包包含太刀模组和动作资源，可直接导入。
+
+安装
+
+1. 从官方发布页安装对应的 Android APK，并确认原游戏可以进入村庄。
+   https://github.com/morerokk/MHGURecomp/releases/tag/0.20.0
+2. 已装过凌越太刀的玩家，请先备份旧的 Wilds-LS-World 文件夹。保留一个版本启用即可。
+3. 打开游戏内设置的 Files／文件页，选择 Import mod (zip)／导入模组 ZIP，选择本 ZIP。确认导入的模组名为 Wilds-LS-World。
+4. 退出并重新打开应用。在 Mods／模组页确认 Wilds-LS-World 已启用。公会太刀可在训练任务验证光辉纳刀和增幅护腕。
+5. 手动安装时，将解压后的 Wilds-LS-World 放入当前应用数据目录的 mods 文件夹。默认路径为 Android/data/io.github.morerokk.mhgurecomp/files/mods/。
+   安装后插件应位于 mods/Wilds-LS-World/romfs/nativeNX/plugins/mhw_ls_rebuild.nro。
+6. 回退时退出游戏，停用或移出本模组。已备份旧版的玩家可换回旧版目录。
+
+手柄与画面
+
+详细按键见同包的《安装与按键说明.txt》。使用游戏中显示的动作键位。公会太刀的光辉纳刀为 ZR＋X＋A，集中模式为 ZL。操作类型 0 可继续使用方向键发动狩技。
+安卓包使用该平台的 Forge 画面尺寸绘制护腕与前景特效。Windows 定制后处理的全屏径向模糊和折射仅由对应的 Windows 补丁提供。
+手机和安卓掌机的实体设备复测待完成。

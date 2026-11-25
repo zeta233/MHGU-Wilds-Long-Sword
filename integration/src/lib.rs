@@ -57,7 +57,7 @@ static WILDS_WOUNDS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
 static WILDS_LOCK_HINT: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(ml_world_combat, ml_wilds_moves, ml_recomp_runtime))]
 unsafe extern "C" { fn ml_hud_right_offset() -> u32; }
-#[cfg(all(ml_world_combat, ml_wilds_moves, not(ml_recomp_runtime)))]
+#[cfg(all(ml_world_combat, ml_wilds_moves, ml_switch_viewport))]
 unsafe extern "C" { fn ml_hud_native_crop() -> u32; }
 #[cfg(ml_world_combat)]
 #[unsafe(no_mangle)]
@@ -104,7 +104,7 @@ fn draw_gauge_glow() {
     #[cfg(not(ml_ascendance_prototype))]
     let boost = 0;
     let size = context::get_io().DisplaySize;
-    #[cfg(all(ml_wilds_moves, not(ml_recomp_runtime)))]
+    #[cfg(all(ml_wilds_moves, ml_switch_viewport))]
     let size = {
         let crop = unsafe { ml_hud_native_crop() };
         if crop != 0 {

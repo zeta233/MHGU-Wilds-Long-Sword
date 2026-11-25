@@ -1,6 +1,6 @@
-param([ValidateSet('Recomp','Switch')][string]$Platform = 'Recomp')
+param([ValidateSet('Recomp','Android','Switch')][string]$Platform = 'Recomp')
 $ErrorActionPreference = 'Stop'
-$env:ML_RECOMP_RUNTIME = if ($Platform -eq 'Switch') { '0' } else { '1' }
+$env:ML_RECOMP_RUNTIME = @{Recomp='1'; Android='android'; Switch='0'}[$Platform]
 foreach ($name in 'ML_ANIMATION_PREVIEW','ML_ATTACHMENT_PREVIEW','ML_DEBUG_FORCE','ML_TEST_ANY_STYLE','ML_WORLD_AUDIO_PROBE','ML_WORLD_FX_PROBE','ML_ART_FIXTURE','ML_TRACE_EVENTS') {
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }

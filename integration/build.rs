@@ -8,10 +8,14 @@ fn main(){
     let combat=env::var("ML_WORLD_COMBAT").as_deref()==Ok("1");
     let debug_force=env::var("ML_DEBUG_FORCE").as_deref()==Ok("1");
     let wilds=env::var("ML_WILDS_MOVES").as_deref()==Ok("1");
-    let recomp=env::var("ML_RECOMP_RUNTIME").as_deref()!=Ok("0");
+    let runtime=env::var("ML_RECOMP_RUNTIME");
+    let switch_viewport=runtime.as_deref()==Ok("0");
+    let recomp=!switch_viewport&&runtime.as_deref()!=Ok("android");
     println!("cargo:rerun-if-env-changed=ML_RECOMP_RUNTIME");
     println!("cargo:rustc-check-cfg=cfg(ml_recomp_runtime)");
+    println!("cargo:rustc-check-cfg=cfg(ml_switch_viewport)");
     if recomp { println!("cargo:rustc-cfg=ml_recomp_runtime"); }
+    if switch_viewport { println!("cargo:rustc-cfg=ml_switch_viewport"); }
     let any_style=env::var("ML_TEST_ANY_STYLE").as_deref()==Ok("1");
     println!("cargo:rerun-if-env-changed=ML_TEST_ANY_STYLE");
     println!("cargo:rerun-if-env-changed=ML_WILDS_MOVES");
@@ -64,6 +68,7 @@ fn main(){
             .arg(if debug_force {"-DML_DEBUG_FORCE=1"} else {"-DML_DEBUG_FORCE=0"})
             .arg(if wilds {"-DML_WILDS_MOVES=1"} else {"-DML_WILDS_MOVES=0"})
             .arg(if recomp {"-DML_RECOMP_RUNTIME=1"} else {"-DML_RECOMP_RUNTIME=0"})
+            .arg(if switch_viewport {"-DML_SWITCH_VIEWPORT=1"} else {"-DML_SWITCH_VIEWPORT=0"})
             .arg(if ascendance {"-DML_ASCENDANCE_PROTOTYPE=1"} else {"-DML_ASCENDANCE_PROTOTYPE=0"})
             .arg(if any_style {"-DML_TEST_ANY_STYLE=1"} else {"-DML_TEST_ANY_STYLE=0"})
             .arg(if input_vm {"-DML_WORLD_INPUT_VM=1"} else {"-DML_WORLD_INPUT_VM=0"})

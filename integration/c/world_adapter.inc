@@ -37,7 +37,7 @@ unsigned ml_hud_right_offset(void)
     if(r0||r2){unsupported=1;return 0;}
     return r1;
 }
-#else
+#elif ML_SWITCH_VIEWPORT
 unsigned ml_hud_native_crop(void)
 {
     const void *renderer=(const void *)(uptr)word((const void *)main_base,0x2126998);
