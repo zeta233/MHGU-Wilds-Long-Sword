@@ -1,5 +1,9 @@
 //! Clean host shim: no legacy controller, private motion data or hit rewrites.
 #![no_std]
+#[cfg(all(ml_ascendance_prototype, ml_world_presentation))]
+mod radiance;
+#[cfg(ml_ascendance_prototype)]
+mod boost_hud;
 use core::sync::atomic::{AtomicU32,AtomicU64,Ordering};
 use forge::log::prelude::*;
 static BASE:AtomicU32=AtomicU32::new(0);
@@ -41,6 +45,12 @@ static GAUGE_GLOW: AtomicU32 = AtomicU32::new(0);
 static WILDS_CHARGE: AtomicU32 = AtomicU32::new(0);
 #[cfg(ml_world_combat)]
 static WILDS_FOCUS: AtomicU32 = AtomicU32::new(0);
+#[cfg(ml_ascendance_prototype)]
+static ASCENDANCE_GAUGE: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(ml_ascendance_prototype)]
+#[unsafe(no_mangle)]
+extern "C" fn ml_ascendance_gauge(value: u32) { ASCENDANCE_GAUGE.store(value, Ordering::Relaxed); }
 #[cfg(ml_world_combat)]
 static WILDS_WOUNDS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
 #[cfg(ml_world_combat)]
@@ -85,13 +95,19 @@ fn draw_gauge_glow() {
     let focus = WILDS_FOCUS.swap(0, Ordering::Relaxed);
     let lock_hint = WILDS_LOCK_HINT.swap(0, Ordering::Relaxed);
     let wounds = core::array::from_fn::<_, 12, _>(|slot| WILDS_WOUNDS[slot].swap(0, Ordering::Relaxed));
-    if value == 0 && charge == 0 && focus == 0 && lock_hint == 0 && wounds.iter().all(|&wound| wound == 0) { return; }
+    #[cfg(ml_ascendance_prototype)]
+    let boost = ASCENDANCE_GAUGE.swap(0, Ordering::Relaxed);
+    #[cfg(not(ml_ascendance_prototype))]
+    let boost = 0;
     let size = context::get_io().DisplaySize;
     let scale = (size.x / 640.0).min(size.y / 360.0);
     let left = (size.x - 640.0 * scale) * 0.5;
     let top = (size.y - 360.0 * scale) * 0.5;
     let width = 48.0 * (value >> 8) as f32 / 100.0;
     let dl = DrawList::foreground();
+    #[cfg(all(ml_ascendance_prototype, ml_world_presentation))]
+    radiance::draw(&dl, size, scale);
+    if value == 0 && charge == 0 && focus == 0 && lock_hint == 0 && boost == 0 && wounds.iter().all(|&wound| wound == 0) { return; }
     for wound in wounds {
         if wound == 0 { continue; }
         let x = ((wound & 4095) as f32 / 4094.0) * size.x;
@@ -156,6 +172,8 @@ fn draw_gauge_glow() {
         ImVec2::new(left+(64.0+width)*scale, top+40.0*scale),
         color(248,235,223,value as u8), 0.0);
     }
+    #[cfg(ml_ascendance_prototype)]
+    if boost != 0 { boost_hud::draw(&dl, left, top, scale, boost); }
     if charge > 0 {
         let progress = (charge-1).min(100) as f32 / 100.0;
         let start = ImVec2::new(left+64.0*scale, top+43.0*scale);
@@ -164,3 +182,4 @@ fn draw_gauge_glow() {
         dl.add_rect_filled(start,ImVec2::new(left+(64.0+48.0*progress)*scale,top+46.0*scale),tint,0.0);
     }
 }
+

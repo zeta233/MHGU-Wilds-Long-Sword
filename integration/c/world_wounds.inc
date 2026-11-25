@@ -82,7 +82,17 @@ static void world_wound_owner(void *a)
 
 static int world_monster_reaction(void *target)
 {
-    if(target!=wound_recoil.target)return world_original_monster_reaction(target);
+    if(target!=wound_recoil.target){
+#if ML_ASCENDANCE_PROTOTYPE
+        unsigned pending=ascendance_reaction_before(target);
+        unsigned before=pending?u16(target,0x73e0):0;
+        int result=world_original_monster_reaction(target);
+        if(result&&pending)ascendance_reaction_after(target,pending,before);
+        return result;
+#else
+        return world_original_monster_reaction(target);
+#endif
+    }
     wound_recoil.target=0;
     void *status=(void *)(uptr)word(target,0x1428);
     if(status!=wound_recoil.status||byte(target,AREA)!=wound_recoil.area||
@@ -237,6 +247,18 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
     unsigned after=u16(status,0x488+2*region);
     unsigned damage=(uint16_t)(after-before);
     if(!damage||damage>2000)return;
+#if ML_ASCENDANCE_PROTOTYPE
+    if(ascendance_flash_attack(attack)){
+#if ML_WORLD_PRESENTATION
+        if(!ascendance.radiance_hit&&ascendance_independent_flash())
+            world_radiance_contact_fx(actor,point);
+#endif
+        ascendance_flash_target(actor,attack,target,status,region,point);
+    }
+    ascendance_hit(actor,attack,target,0,damage);
+    if(ascendance_owner(actor)&&ascendance_owned_blade(attack))
+        ascendance_musou_mark(target,status,region,(const float *)point,damage);
+#endif
     world_wound_owner(actor);
     WMonsterWounds *monster=wilds_wounds+slot;
     unsigned id=u16(status,0x1b6);
@@ -273,6 +295,9 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
         wound_recoil.region=region;wound_recoil.until=world_elapsed+.25f;
 #if ML_WORLD_PRESENTATION
         world_helm_impact(actor,(const float *)point);
+#endif
+#if ML_ASCENDANCE_PROTOTYPE
+        ascendance_hit(actor,0,target,1,0);
 #endif
         log_event("wilds_wound_break",world.actor,(u32)(uptr)target,region,bonus);
         return;
@@ -339,18 +364,24 @@ static unsigned wound_hidden(WSurfaceVec point,WSurfaceVec view_dir,const WWound
     return 0;
 }
 
+static int world_screen_view(void *camera)
+{
+    const void *hud=*(void **)(main_base+0x212668c),*render=*(void **)(main_base+0x184d750);
+    if(!hud||!render)return -1;
+    unsigned view=byte(hud,236);
+    if(view>=4)return -1;
+    const void *viewport=(const void *)((uptr)render+432*view);
+    if(word(viewport,84)!=(u32)(uptr)camera||word(viewport,112)<=word(viewport,104)||
+       word(viewport,116)<=word(viewport,108))return -1;
+    return (int)view;
+}
 static void world_wound_markers(void *a,void *camera)
 {
     unsigned aiming=(ml_pad_raw_bits()&PAD_FOCUS)&&(byte(a,DRAWN)&1);
     const void *registry=(const void *)(uptr)word((void *)main_base,0x1851fe0);
     if(!registry||!(real(a,0x1c)>0))return;
-    const void *hud=*(void **)(main_base+0x212668c),*render=*(void **)(main_base+0x184d750);
-    if(!hud||!render)return;
-    unsigned view=byte(hud,236);
-    if(view>=4)return;
-    const void *viewport=(const void *)((uptr)render+432*view);
-    if(word(viewport,84)!=(u32)(uptr)camera||word(viewport,112)<=word(viewport,104)||
-       word(viewport,116)<=word(viewport,108))return;
+    int view=world_screen_view(camera);
+    if(view<0)return;
     world_wound_owner(a);
     unsigned marker=0;
     for(unsigned i=0;i<WOUND_MONSTERS&&marker<WOUND_MARKERS;++i){

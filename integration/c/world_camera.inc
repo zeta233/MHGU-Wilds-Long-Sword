@@ -11,6 +11,51 @@ static unsigned world_camera_sample,world_camera_active,world_camera_object;
 static unsigned world_camera_origin[2];
 static int world_camera_delta[2];
 static float world_camera_age,world_camera_duration;
+static u32 (*world_original_view)(void *,void *);
+static void *world_player_view_camera;
+static struct {
+    void *camera,*actor;
+    unsigned area,source;
+    float distance_squared;
+} world_view_baseline;
+
+static u32 world_view(void *out,void *camera)
+{
+    if(camera!=world_player_view_camera)return world_original_view(out,camera);
+    void *a=(void *)(uptr)word(camera,0x85c);
+    if(!local_supported(a)||(int16_t)u16(a,HP)<=0)return world_original_view(out,camera);
+    unsigned area=byte(a,AREA);
+    unsigned steady=world.actor==(u32)(uptr)a&&world.epoch==area&&u16(a,STATE)==16&&
+        u16(a,ACTION)==w_action(world.move)&&
+        (world.move==W_FORESIGHT||(world.move==W_SMALL&&world.slot==238));
+    float eye[3],delta[3],distance=0;
+    for(unsigned k=0;k<3;++k){
+        eye[k]=real(camera,0x40+4*k);
+        delta[k]=eye[k]-real(camera,0x60+4*k);
+        distance+=delta[k]*delta[k];
+    }
+    if(world_view_baseline.camera!=camera||world_view_baseline.actor!=a||world_view_baseline.area!=area)
+        world_view_baseline=(__typeof__(world_view_baseline)){.camera=camera,.actor=a,.area=area};
+    if(!steady){
+        world_view_baseline.source=0;
+        if(distance>0)world_view_baseline.distance_squared=distance;
+        return world_original_view(out,camera);
+    }
+    float limit=world_view_baseline.distance_squared;
+    if(!(limit>0&&distance>limit))return world_original_view(out,camera);
+    float ratio=att_sqrt(limit/distance);
+    if(world_view_baseline.source!=world.source){
+        world_view_baseline.source=world.source;
+        log_event("world_steady_view",(u32)(uptr)a,world.source,(u32)att_sqrt(distance),(u32)att_sqrt(limit));
+    }
+    /* The view matrix alone uses the clamped eye. Keep the native camera's
+     * obstacle and aim state for the next update. */
+    for(unsigned k=0;k<3;++k)
+        set_real(camera,0x40+4*k,real(camera,0x60+4*k)+delta[k]*ratio);
+    u32 result=world_original_view(out,camera);
+    for(unsigned k=0;k<3;++k)set_real(camera,0x40+4*k,eye[k]);
+    return result;
+}
 #if ML_WILDS_MOVES
 static unsigned focus_camera_actor,focus_camera_epoch,focus_camera_yaw;
 static unsigned world_camera_heading(void *a,unsigned *heading)
@@ -111,6 +156,8 @@ static unsigned world_camera_target(void *a,unsigned *yaw)
 static void world_camera(void *camera)
 {
     void *a=(void *)(uptr)word(camera,0x85c);
+    if(local_supported(a))world_player_view_camera=camera;
+    else if(world_player_view_camera==camera)world_player_view_camera=0;
     unsigned valid=local_supported(a)&&world_camera_actor==(u32)(uptr)a&&
         world_camera_epoch==byte(a,AREA)&&(int16_t)u16(a,HP)>0;
     if(!valid)world_camera_active=0;
@@ -169,7 +216,12 @@ static void world_camera(void *camera)
     if(local_supported(a)){
         focus_camera_actor=(u32)(uptr)a;focus_camera_epoch=byte(a,AREA);
         focus_camera_yaw=(word(camera,0x9dc)+32768u)&65535u;
-        if((int16_t)u16(a,HP)>0)world_wound_markers(a,camera);
+        if((int16_t)u16(a,HP)>0){
+            world_wound_markers(a,camera);
+#if ML_ASCENDANCE_PROTOTYPE && ML_WORLD_PRESENTATION
+            world_radiance_overlay(a,camera);
+#endif
+        }
     }
 #endif
 }

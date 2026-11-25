@@ -22,7 +22,8 @@ static inline unsigned w_focus_finisher_end(unsigned source)
 enum { W_CRIMSON_DIRECTIONAL=1,W_CRIMSON_LATERAL };
 enum { W_KEEP,W_ENTER,W_NATIVE,W_IDLE,W_ROLL,W_ABORT,W_NATIVE_R,W_MOTION };
 enum { W_RED_ROUND=1,W_RED_IAI=2 };
-enum { W_RELEASE_SEAT_START=120,W_RELEASE_SEAT_ALIGN=134,W_RELEASE_SHEATHE_FRAME=140,W_RELEASE_RECOVERY_CANCEL=205 };
+enum { W_VALOR_COUNTER_GAIN=200 };
+enum { W_RELEASE_SEAT_START=118,W_RELEASE_SEAT_ALIGN=132,W_RELEASE_SHEATHE_FRAME=140,W_RELEASE_RECOVERY_CANCEL=205 };
 /* The roundslash archive removes 48 frames from the original GU timeline. */
 enum { W_ROUND_TAIL_FRAME=62,W_ROUND_CUT_FRAMES=48,W_ROUND_SHEATHE_FRAME=80,W_ROUND_FRAMES=111 };
 typedef struct {
@@ -34,16 +35,19 @@ typedef struct {
     MLObservation base;
     unsigned state,drawn,alive,grounded,rank,contact,counter,resources_ready;
     unsigned previous_weapon_action;
-    unsigned focus_strike,valor,valor_move,valor_draw_cancel;
+    unsigned focus_strike,valor,valor_style,valor_move,valor_draw_cancel;
     unsigned focus_camera_heading,has_focus_heading;
+    unsigned ascendance_active,dividing_stick_heading,rising_sprint;
 } WObservation;
 typedef struct {
     unsigned kind,move,source,slot,native_action,heading;
     int rank_delta,gauge_delta;
     unsigned gauge_clear,gauge_fill,regen_seconds;
+    unsigned valor_gain,skip_round_rank;
     unsigned red_recovery;
     unsigned motion_contract,crimson_direction,sheathed_roll;
     unsigned valor_slide,valor_slide_heading,valor_slide_input;
+    unsigned dividing_step_requested,dividing_step_heading;
     float start,blend,speed;
 } WDecision;
 typedef struct {
@@ -54,15 +58,18 @@ typedef struct {
     unsigned air_sheathe_sample,air_sheathe_held;
     float air_sheathe_buffer;
     unsigned bound,consumed,queued,queued_mask,queued_source,foresight_gauge;
+    struct {
+        unsigned motion,action,generation;
+    } foresight_press;
     unsigned queued_word,queued_shift,queued_heading;
     unsigned counter_success,hit_success,rank_paid,follow_ready;
     unsigned helm_cost_pending;
     unsigned ground_node,main_source,spirit_paid;
     unsigned wilds_tier,wilds_sample,wilds_previous;
-    float wilds_elapsed,wilds_buffer,wilds_roll_buffer;
+    float wilds_elapsed,wilds_buffer,wilds_roll_buffer,wilds_thrust_buffer;
     unsigned crimson_buffer_heading,crimson_buffer_direction,crimson_buffer_source;
     unsigned spirit_crimson_pending,spirit_crimson_held,spirit_crimson_input,spirit_crimson_magnitude,spirit_crimson_repeat;
-    unsigned spirit_crimson_action,spirit_crimson_motion;
+    unsigned spirit_crimson_action,spirit_crimson_motion,spirit_crimson_guard_r;
     float spirit_crimson_confirm;
     float wilds_gauge_fraction;
     unsigned wilds_roll_mod,wilds_roll_heading,wilds_r_pending;
@@ -72,7 +79,10 @@ typedef struct {
     float wilds_r_wait;
     unsigned wilds_stage,wilds_chain_source,wilds_bridge_sample,wilds_bridge_held,wilds_helm_red;
     float wilds_bridge_hold;
-    unsigned wilds_charge_open,wilds_charge_link;
+    float wilds_charge_carry;
+    unsigned wilds_charge_carry_source,wilds_charge_carry_action;
+    unsigned wilds_charge_open,wilds_charge_link,wilds_three_exit_r,wilds_three_exit_sample,wilds_red_three_held;
+    unsigned wilds_slide_exit_sample,wilds_slide_exit_r,wilds_slide_weak_r;
     unsigned red_foresight_chain,valor_foresight;
     unsigned wilds_direction_pending,wilds_direction_heading,wilds_direction_input;
     float wilds_direction_age;
@@ -88,6 +98,23 @@ enum {W_SPIRIT_CRIMSON_INPUT=1,W_SPIRIT_CRIMSON_NEXT};
 #define W_CHARGE_READY_FRAME 180.f
 #define W_CHARGE_READY_SECONDS 2.9f
 #define W_CHARGE_READY_HOLD .30f
+#define W_SPIRIT_FULL_HOLD_SECONDS .18f
+#define W_CHARGED_THREE_BRANCH_FRAME 110.f
+#define W_CHARGED_THREE_POST_SAMPLES 18u
+static inline unsigned w_charged_three_recovery(const WState *s,unsigned sample)
+{
+    return s->wilds_three_exit_sample&&
+        (s->wilds_three_exit_r==902||sample-s->wilds_three_exit_sample<=W_CHARGED_THREE_POST_SAMPLES);
+}
+static inline unsigned w_moving_spirit_one(unsigned source)
+{
+    return source==903||(source>=910&&source<=912);
+}
+static inline unsigned w_moving_spirit_recovery(const WState *s,unsigned sample)
+{
+    return s->wilds_slide_exit_sample&&
+        (s->wilds_slide_exit_r||sample-s->wilds_slide_exit_sample<=18u);
+}
 static inline float w_charge_rate(const WState *s)
 {
     return s->wilds_stage==3?1.3f:1.f;
@@ -95,10 +122,14 @@ static inline float w_charge_rate(const WState *s)
 #endif
 const WClip *w_clip(unsigned source);
 const WEvent *w_event(unsigned source,float frame);
+float w_next_hit_frame(unsigned source,float frame);
 enum {W_FLOAT_SPEED,W_FLOAT_TURN,W_FLOAT_CAMERA};
 float w_float(unsigned source,unsigned channel,float frame);
 unsigned w_source(unsigned motion);
 unsigned w_foresight_stage(unsigned source,const WEvent *event);
+#if ML_WILDS_MOVES && ML_WORLD_INPUT_VM
+WDecision w_foresight_press(WState *s,const WObservation *o);
+#endif
 unsigned w_action(unsigned move);
 unsigned w_valor_draw_cancel(unsigned action,unsigned motion);
 unsigned w_valor_chord(unsigned state,unsigned action,unsigned motion,float frame,unsigned held,unsigned focus);
@@ -130,6 +161,14 @@ static inline unsigned w_native_spirit_one(unsigned state,unsigned action)
      * all reach the same striking clip after their native preparation. */
     return state==16&&(action==16||action==17||action==20||action==21);
 }
+static inline unsigned w_valor_spirit_one(unsigned state,unsigned action)
+{
+    return state==16&&action==130;
+}
+static inline unsigned w_valor_guard_reaction(unsigned state,unsigned action,unsigned motion)
+{
+    return state==16&&(action==108||action==109)&&motion==0x583;
+}
 static inline unsigned w_spirit_one_crimson_source(unsigned state,unsigned action,unsigned motion)
 {
     return w_native_spirit_one(state,action)&&w_guild_source(state,action,motion)==104;
@@ -144,6 +183,16 @@ static inline unsigned w_ground_step_height(float drop)
 }
 unsigned w_guild_spirit_opener(unsigned action,unsigned motion,unsigned previous);
 unsigned w_private(unsigned state,unsigned action);
+/* Native movement action 13 is the uphill run. */
+static inline unsigned w_uphill_run(unsigned state,unsigned action)
+{
+    return state==2&&action==13;
+}
+static inline unsigned w_red_sprint(const WObservation *o)
+{
+    return w_uphill_run(o->state,o->base.native_action)||
+        (o->state==2&&o->base.native_action==2&&o->rising_sprint);
+}
 unsigned w_red_draw(const WObservation *o);
 #if ML_WILDS_MOVES
 unsigned w_sheathed_slide(const WObservation *o);
@@ -152,9 +201,21 @@ void w_reserve_spirit_crimson(WState *s,const MLObservation *input);
 unsigned w_native_roll(unsigned state,unsigned action);
 void w_reset(WState *s);
 WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move);
+WDecision w_art_follow(WState *s,const WObservation *o,unsigned keys);
+WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two);
 WDecision w_iai_press(WState *s,const WObservation *o);
+WDecision w_iai_attack(WState *s,const WObservation *o,unsigned key);
 unsigned w_iai_ready(const WState *s,const WObservation *o);
 WDecision w_debug_enter(WState *s,const WObservation *o,unsigned move);
+#if ML_ASCENDANCE_PROTOTYPE
+unsigned w_wilds_fade_action(const WObservation *o);
+WDecision w_wilds_round(WState *,const WObservation *);
+WDecision w_wilds_round_charge(WState *,const WObservation *);
+WDecision w_dividing_spirit_attack(WState *s,const WObservation *o,unsigned keys);
+WDecision w_dividing_sheathe(WState *s,const WObservation *o);
+WDecision w_radiance_enter(WState *s,const WObservation *o,unsigned move);
+WDecision w_radiance_pursuit_enter(WState *s,const WObservation *o);
+#endif
 WDecision w_step(WState *s,const WObservation *o);
 WDecision w_leave(WState *s);
 void w_input_finish(WState *s,const WObservation *o,WDecision decision);

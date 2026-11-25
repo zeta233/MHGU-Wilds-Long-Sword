@@ -3,9 +3,21 @@
 #include <stdio.h>
 #define ML_WILDS_MOVES 1
 #define ML_WORLD_INPUT_VM 1
+#define ML_ASCENDANCE_PROTOTYPE 1
 #include "world_core.c"
 static WObservation obs(void){return (WObservation){.base={.actor=1,.epoch=1,.gauge=100,.heading=0,.simulation_delta=1},.state=16,.alive=1,.drawn=1,.grounded=1,.resources_ready=1,.rank=3};}
-static WDecision tick(WState *s,WObservation *o,unsigned held,float frame){o->base.held=held;o->base.animation_frame=frame;o->base.sample_sequence++;return wilds_step(s,o);}
+static WDecision tick(WState *s,WObservation *o,unsigned held,float frame)
+{
+ o->base.held=held;o->base.animation_frame=frame;o->base.sample_sequence++;
+ if(s->move==W_CHIJIN){
+  o->base.eligible=1;
+  s->actor=o->base.actor;s->epoch=o->base.epoch;
+  o->base.native_action=w_action(s->move);o->base.motion=0x500+s->slot;
+  WDecision d=w_foresight_press(s,o);
+  if(d.kind!=W_KEEP)return d;
+ }
+ return wilds_step(s,o);
+}
 
 static void valor_routes(void)
 {
@@ -58,9 +70,9 @@ static void valor_routes(void)
  for(unsigned blue=0;blue<=1;blue++){
   WObservation o=obs();o.valor=blue;
   WState s={.move=W_SLIDE,.source=903};
-  assert(wilds_spirit(&s,&o).native_action==(blue?116:23));
+  assert(wilds_spirit(&s,&o,0).native_action==(blue?116:23));
   s=(WState){.move=W_FOCUS,.source=914};
-  assert(wilds_spirit(&s,&o).native_action==(blue?117:26));
+  assert(wilds_spirit(&s,&o,0).native_action==(blue?117:26));
   s=(WState){.move=W_CHARGE,.source=908,.wilds_stage=2};
   assert(tick(&s,&o,0,1).kind==W_KEEP);
   assert(tick(&s,&o,ML_R,29).kind==W_KEEP);
@@ -181,6 +193,7 @@ static void charge_routes(void)
  const unsigned sources[]={901,920,921,906,907,903,910,911,912,922,923,924,925,902,914,927,928,929,930};
  for(unsigned i=0;i<sizeof(sources)/sizeof(*sources);i++){
   WObservation o=obs();WState s={.source=sources[i],.move=W_CHARGE};
+  o.rank=2;
   unsigned frame=wilds_charge_window(&s,&o);assert(frame);
   s.wilds_bridge_hold=.58f;
   assert(tick(&s,&o,ML_R,frame-1).kind==W_KEEP);
@@ -304,6 +317,10 @@ int main(void){
  o=obs();w_reset(&s);w_wilds_enter(&s,&o,W_CHIJIN);
  assert(tick(&s,&o,ML_R|ML_A,50).move==W_FORESIGHT);
  o=obs();w_reset(&s);w_wilds_enter(&s,&o,W_CHIJIN);
+ assert(tick(&s,&o,ML_R|ML_A,32).kind==W_KEEP);
+ assert(tick(&s,&o,0,43).kind==W_KEEP);
+ assert(tick(&s,&o,0,44).source==918);
+ o=obs();w_reset(&s);w_wilds_enter(&s,&o,W_CHIJIN);
  assert(tick(&s,&o,ML_R|ML_B,50).move==W_SHEATHE);
  o=obs();w_reset(&s);w_wilds_enter(&s,&o,W_CHIJIN);
  assert(tick(&s,&o,ML_B,50).kind==W_ROLL);
@@ -335,16 +352,23 @@ int main(void){
  for(int i=0;i<8;i++){o.base.sample_sequence++;d=wilds_bridge(&s,&o,1);if(d.kind!=W_KEEP)break;}
  assert(d.move==W_SLIDE&&d.source==903&&d.heading==16384);
  for(int i=0;i<40;i++)d=tick(&s,&o,ML_R,30);
- d=tick(&s,&o,ML_R,56);assert(d.move==W_CHARGE&&s.wilds_stage==2);
+ assert(tick(&s,&o,ML_R,56).kind==W_KEEP);
+ o.base.magnitude=0;
+ assert(tick(&s,&o,0,57).kind==W_KEEP);
+ for(unsigned frame=58;frame<=97;frame++){
+  d=tick(&s,&o,ML_R,frame);
+  if(d.kind!=W_KEEP)break;
+ }
+ assert(d.move==W_CHARGE&&s.wilds_stage==2);
  o=obs();w_reset(&s);s.move=W_LAND;s.wilds_helm_red=1;s.rank=2;o.rank=2;
  o.base.magnitude=100;o.base.input_heading=16384;o.base.heading=1234;
  d=w_wilds_enter(&s,&o,W_RELEASE);assert(d.heading==1234);
- o=obs();w_reset(&s);wilds_round(&s,&o);wilds_phase(&s,&o,917);
+ o=obs();w_reset(&s);w_wilds_round(&s,&o);wilds_phase(&s,&o,917);
  o.base.magnitude=100;
  assert(tick(&s,&o,0,wilds_clip(917)->frames-2).kind==W_KEEP);
  assert(tick(&s,&o,0,wilds_clip(917)->frames-1).kind==W_IDLE);
  /* A closed weapon during the authored recovery is not an interruption. */
- o=obs();w_reset(&s);wilds_round(&s,&o);wilds_phase(&s,&o,917);
+ o=obs();w_reset(&s);w_wilds_round(&s,&o);wilds_phase(&s,&o,917);
  s.actor=1;s.epoch=1;o.drawn=0;o.base.motion=0x500+s.slot;o.base.native_action=w_action(s.move);o.base.animation_frame=W_ROUND_SHEATHE_FRAME;
  d=w_step(&s,&o);assert(d.kind==W_KEEP&&s.source==917);
  o.base.animation_frame=wilds_clip(917)->frames-1;o.base.sample_sequence++;assert(w_step(&s,&o).kind==W_IDLE);

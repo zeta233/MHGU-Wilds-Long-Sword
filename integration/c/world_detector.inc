@@ -10,7 +10,7 @@ static u32 (*world_original_player_query)(void *,void *,void *);
 static u32 (*world_original_attack_shapes)(void *);
 static unsigned world_detected_attack;
 #if ML_WILDS_MOVES
-static unsigned world_iai_body_actor,world_iai_body_epoch,world_iai_body_sample;
+static unsigned world_body_actor,world_body_epoch,world_body_sample;
 #endif
 static void world_detector_clear(void)
 {
@@ -73,6 +73,9 @@ static void world_counter_accept(void *a,unsigned type)
     if(world.move==W_BIG)world_big_counter_flash(a);
 #endif
     float duration=world.move==W_FORESIGHT?1.0f:2.0f;
+#if ML_ASCENDANCE_PROTOTYPE
+    if(ascendance_independent_flash())duration=.22f;
+#endif
     if(world_armor<duration)world_armor=duration;
     log_event("world_counter",(u32)(uptr)a,world.source,(u32)real(a,FRAME),type);
     ((void (*)(void *,u32,uptr,u32))(main_base+0x282624))(a,9,(uptr)a+0x2550,1);
@@ -90,6 +93,9 @@ static void world_detect_attack(void *manager,void *attack,void *a)
         * owner kind10 or originating owner kind6e (monster projectiles). */
        (byte(attack,0x10)==1||byte(attack,0x6e)==1)&&
        word(attack,0xc)!=(u32)(uptr)a){
+#if ML_ASCENDANCE_PROTOTYPE
+        if(ascendance_independent_flash()&&real(a,FRAME)>=RADIANCE_FLASH_COUNTER_END)return;
+#endif
         unsigned red=0;
 #if ML_WILDS_MOVES
         red=world.move==W_FORESIGHT&&world.source==918;
@@ -153,10 +159,9 @@ static u32 world_player_query(void *manager,void *attack,void *a)
     /* Remember a real monster-body collision until GU processes its damage
      * packet. The collision pass can run before the hunter update. */
     if(!before&&byte(a,0x31e0)&&world.actor==(u32)(uptr)a&&world.epoch==byte(a,AREA)&&
-       (world.move==W_SHEATHE||world.move==W_SMALL||world.move==W_BIG)&&
        (byte(attack,0x10)==1||byte(attack,0x6e)==1)&&word(attack,0xc)!=(u32)(uptr)a){
-        world_iai_body_actor=(u32)(uptr)a;world_iai_body_epoch=world.epoch;
-        world_iai_body_sample=sample_sequence;
+        world_body_actor=(u32)(uptr)a;world_body_epoch=world.epoch;
+        world_body_sample=sample_sequence;
     }
 #endif
     if(watched){

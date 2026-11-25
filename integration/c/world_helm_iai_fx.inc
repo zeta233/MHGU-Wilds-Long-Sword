@@ -45,6 +45,9 @@ static void world_helm_line_tick(void *a)
 static void world_big_fx_tick(void *a,float frame)
 {
     if(world.move!=W_BIG)return;
+#if ML_ASCENDANCE_PROTOTYPE
+    if(ascendance_independent_flash())return;
+#endif
     float point[3];
     if(frame>=(world.source==308||world.source==310?10:12)&&!(world_sfx_seen&4)&&world_joint47(a,point)){
         world_sfx_seen|=4;world_sfx_emit(a,point,0x3f64);world_sfx_emit(a,point,0x3f65);

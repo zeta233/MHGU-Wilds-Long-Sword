@@ -59,6 +59,11 @@ static const WShellPosition *world_release_shell(void *attack)
 static void world_monster_damage(void *manager,void *attack,void *target,void *point,
                                  void *v1,void *v2,void *part,void *shape)
 {
+#if ML_ASCENDANCE_PROTOTYPE
+    if(target&&target==radiance_pursuit.target&&!radiance_pursuit.confirmed&&
+       !ascendance_flash_attack(attack)&&part&&byte(part,8)==radiance_pursuit.region)
+        radiance_pursuit.target=0;
+#endif
 #if ML_WILDS_MOVES
     const WShellPosition *release_shell=world_release_shell(attack);
     if(release_shell){
@@ -322,6 +327,9 @@ static void world_schedule_release(void *a)
 #endif
 static void world_follow_capture(void *a)
 {
+#if ML_ASCENDANCE_PROTOTYPE
+    if(ascendance_independent_flash())return;
+#endif
     unsigned helm=world.move==W_DOWN||world.move==W_LAND;
     if((helm&&world_helm_count>=7)||(!helm&&world.move!=W_BIG)||!world_contact(a))return;
     unsigned counter=world.counter_success||world_counter_seen;

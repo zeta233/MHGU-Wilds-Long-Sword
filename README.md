@@ -1,12 +1,19 @@
-# 荒野太刀 · MHGU Recomp
+# 荒野太刀 · 凌越扩展 · MHGU Recomp
 
 将《怪物猎人 荒野》的太刀动作移植到 Windows 版 MHGU Recomp，支持公会与勇气风格。公会和勇气普通模式可使用特殊纳刀、居合和见切。勇气蓝刃可以使用刚气刃 GP、赤刃连段和消耗勇气槽的红刃见切。
 
 ## 安装与按键
 
-保存并退出游戏，使用 Windows 版 MHGU Recomp 0.17.9 和 Switch Forge v1.5.1 前置。下载完整安装包，将其中的 Wilds-LS-World 文件夹解压到游戏的 mods 目录。更新前可将旧版移出 mods 备份。招式输入、集中模式、更新和回退步骤见随包说明。
+保存并退出游戏，使用 Windows 版 MHGU Recomp 0.17.9 和 Switch Forge v1.5.1 前置。将完整安装包中的 Wilds-LS-World 文件夹解压到游戏的 mods 目录。更新前先将旧版移出 mods 备份。光辉闪斩与追击二刀的屏幕径向模糊和折射需要同一发布页提供的 Recomp 后处理补丁。
 
-[下载完整包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/latest) · [安装与按键说明](安装与按键说明.txt)
+[下载完整包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/latest) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
+
+## v0.253 凌越扩展
+
+- 加入增幅护腕、光辉纳刀、光辉闪斩、追击二刀、强化纳刀、强化气刃派生与无双连斩。护腕会显示充能和增幅倒计时，右侧三格随时间消退。
+- 光辉纳刀可接在持刀招式和部分狩技之后，移动时使用跑步步态。校正强化纳刀的刀身转向、刀鞘握点与入鞘轨迹，扩大追击两刀的纵向命中范围。
+- 调整集中模式赤刃输入、连续蓄力的动作继承，以及气刃突刺、见切、特殊纳刀、集中突刺、蓄力和移动气刃斩与狩技的派生。方向键狩技支持收招前缓冲。
+- 普通见切和红刃见切在合法窗口内收到 R+A 即出招，支持赤刃斩收招前短按。公会风格 60 FPS 实测，输入到动作由 5–7 帧缩到 1 帧。两种见切均在怪物命中同帧的测试中触发反击。
 
 ## v0.3.105 更新
 
@@ -84,6 +91,6 @@ wilds-port/tools 提供动作、战斗表和音效转换工具。重新制作资
 
 ## 来源
 
-项目基于 Akumi-xu 的公会太刀世界招式移植。动作转换工具参考 RevilLib、MHGU-blenderImporter 和 REasy；REasy 参考数据附有原许可。游戏及动作、音效素材归各自权利人所有。
+项目基于 Akumi-xu 的公会太刀世界招式移植。凌越扩展参考 Long Sword Boost 项目的招式和视觉设计。动作转换工具参考 RevilLib、MHGU-blenderImporter 和 REasy，REasy 参考数据附有原许可。游戏及动作、音效素材归各自权利人所有。
 
 [Akumi-xu 原项目](https://github.com/Akumi-xu/MHW-Long-Sword-Moveset-for-MHGU)

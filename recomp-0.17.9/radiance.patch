@@ -1,0 +1,281 @@
+diff --git a/runtime/kernel.c b/runtime/kernel.c
+index d30c869a3553f47775aed165f3ebb7221b62b9fb..375d8458ac801bcff84f4ff4072191a2d9d9f42e 100644
+--- a/runtime/kernel.c
++++ b/runtime/kernel.c
+@@ -1,3 +1,4 @@
++#include "radiance_present.h"
+ // A small Horizon kernel for an AArch32 process: handles, threads, synchronization, memory, and the SVC
+ // dispatcher. Register usage follows the 32-bit SVC ABI (the SDK's svc stubs: 64-bit values in register pairs,
+ // fifth and later arguments in r4+).
+@@ -482,6 +483,7 @@ out:
+ 
+ // ------------------------------------------------------------------ SVC dispatch
+ static void debug_string(uint32_t p, uint32_t len) {
++    if (len == 14 && radiance_present_packet(gstr(p), len)) return;
+     fprintf(stderr, "[guest] %.*s", (int)len, gstr(p));
+     if (len && gstr(p)[len - 1] != '\n') fputc('\n', stderr);
+ }
+diff --git a/runtime/nvn/vulkan/device.c b/runtime/nvn/vulkan/device.c
+index c093b9fdc4837ea0a50e7001b1a7cbe9757bb4dc..13b9ffe34124285a700c5a6450507816434138ea 100644
+--- a/runtime/nvn/vulkan/device.c
++++ b/runtime/nvn/vulkan/device.c
+@@ -896,7 +896,8 @@ void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h)
+ }
+ 
+ // ================================================================== presentation (nvnQueuePresentTexture)
+-void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh);  // (exec.c)
++#include "../../radiance_present.h"
++unsigned vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh);  // (exec.c)
+ 
+ static uint64_t g_frames;
+ uint64_t vk_frame_counter(void) { return g_frames; }
+@@ -927,15 +928,17 @@ void backend_present(NvnTexture *t) {
+         // the game's image, as large as fits with its aspect ratio, centred
+         double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height, s = fmin(ww / t->width, wh / t->height);
+         double vw = t->width * s, vh = t->height * s;
+-        vk_present_draw(vk_cmd(), b, (float)((ww - vw) / 2), (float)((wh - vh) / 2), (float)vw, (float)vh);
++        unsigned effects = vk_present_draw(vk_cmd(), b, (float)((ww - vw) / 2), (float)((wh - vh) / 2), (float)vw, (float)vh);
+         OverlayTarget ot = {g_vk.inst, g_vk.phys, g_vk.dev, g_vk.qfam, g_vk.queue, g_vk.pcache, sc_pass,
+                             g_vk.sc_extent.width, g_vk.sc_extent.height};
+-        overlay_draw(vk_cmd(), &ot);  // (Forge plugins' ImGui overlay, over the game: runtime/overlay.cpp)
++        if (!radiance_present_compare()) overlay_draw(vk_cmd(), &ot);  // (Forge plugins' ImGui overlay, over the game: runtime/overlay.cpp)
+         char path[300];
+         extern char g_shot_request[256];  // (runtime/host_input.c: MHGU_CONTROL "shot <name>")
+         extern char g_burst_name[200];
+         extern int g_burst_left, g_burst_index;
+         if (!g_shot_request[0] && g_burst_left > 0) {
++            if (effects && radiance_present_compare())
++                LOG("[radiance] %s_%d mask=%u\n", g_burst_name, g_burst_index, effects);
+             g_burst_left--;
+             snprintf(g_shot_request, sizeof g_shot_request, "shots/%s_%d.png", g_burst_name, g_burst_index++);
+         }
+diff --git a/runtime/nvn/vulkan/exec.c b/runtime/nvn/vulkan/exec.c
+index 5212758a637fe3064bdad908cf2196941cb1c3db..77efbab7e9f416d0ca81a05ac5cdccbe831a8e4e 100644
+--- a/runtime/nvn/vulkan/exec.c
++++ b/runtime/nvn/vulkan/exec.c
+@@ -4681,6 +4681,7 @@ static void copy_texture(const TexRef *src, const TexRef *dst, uint64_t flags) {
+ }
+ 
+ // ================================================================== presentation helper (device.c)
++#include "../../radiance_present.h"
+ VkRenderPass vk_window_pass(void);
+ static VkPipelineLayout present_layout;
+ static VkDescriptorSetLayout present_set_layout;
+@@ -4698,7 +4699,7 @@ static VkPipeline present_pipeline(bool hdr) {
+         VkDescriptorSetLayoutBinding b = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
+         VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &b};
+         VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &present_set_layout));
+-        VkPushConstantRange r = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48};
++        VkPushConstantRange r = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 96};
+         VkPipelineLayoutCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
+                                          .pSetLayouts = &present_set_layout, .pushConstantRangeCount = 1, .pPushConstantRanges = &r};
+         VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &ci, NULL, &present_layout));
+@@ -4740,8 +4741,8 @@ static VkImageView raw_view(TexBackend *b) {
+ }
+ 
+ // Inside the window image's render pass (device.c): the game image into (vx, vy, vw, vh).
+-void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh) {
+-    if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return;
++unsigned vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh) {
++    if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return 0;
+     bool hdr = vk_hdr_presented_bt2020();
+     VkPipeline p = present_pipeline(hdr);
+     VkDescriptorSet ds = vk_alloc_set(present_set_layout);
+@@ -4753,10 +4754,13 @@ void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, floa
+     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &ds, 0, NULL);
+     VkViewport vp = {vx, vy, vw, vh, 0, 1};
+     vkCmdSetViewport(cb, 0, 1, &vp);
+-    float pv[12] = {nvn_window_origin() == 0 ? 1.0f : 0.0f, 0, 0, 0, 0, 0, 1, 1,  // (flip, crop origin / size)
++    float pv[24] = {nvn_window_origin() == 0 ? 1.0f : 0.0f, 0, 0, 0, 0, 0, 1, 1,  // (flip, crop origin / size)
+                     hdr ? vk_hdr_gamma() : 0, 0, 0, 0};                       // (HDR: the intermediate's gamma)
+-    vkCmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48, pv);
++    pv[1] = radiance_present_compare() ? 1.0f : 0.0f;
++    unsigned effects = radiance_present_sample(pv + 12, pv[0] > 0.5f);
++    vkCmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pv), pv);
+     vkCmdDraw(cb, 3, 1, 0, 0);
++    return effects;
+ }
+ 
+ // ================================================================== executor
+diff --git a/runtime/nvn/vulkan/radiance_glsl.inc b/runtime/nvn/vulkan/radiance_glsl.inc
+new file mode 100644
+index 0000000000000000000000000000000000000000..b4144d7100c946f5589c9e19f04f5eaf593b2e38
+--- /dev/null
++++ b/runtime/nvn/vulkan/radiance_glsl.inc
+@@ -0,0 +1,52 @@
++"// uv follows the scene texture; all pulse centres use the same orientation.\n"
++"// control: centre.xy, age in seconds, peak strength. Zero strength is idle.\n"
++"vec3 radiance_taps(sampler2D scene, vec2 uv, vec4 draw, vec4 contact, vec4 fan) {\n"
++"    if (max(draw.w, max(contact.w, fan.w)) <= 0.0)\n"
++"        return texture(scene, uv).rgb;\n"
++"\n"
++"    float aspect = float(textureSize(scene, 0).x) / float(textureSize(scene, 0).y);\n"
++"    vec2 displacement = vec2(0.0);\n"
++"    vec2 blur = vec2(0.0);\n"
++"    vec4 pulses[3] = vec4[3](draw, contact, fan);\n"
++"    for (int i = 0; i < 3; ++i) {\n"
++"        vec4 pulse = pulses[i];\n"
++"        if (pulse.w <= 0.0) continue;\n"
++"        float duration = i == 1 ? 0.70 : 0.20;\n"
++"        float age = clamp(pulse.z / duration, 0.0, 1.0);\n"
++"        float envelope = pulse.w * (1.0 - smoothstep(0.02, 1.0, age));\n"
++"        vec2 delta = (uv - pulse.xy) * vec2(aspect, 1.0);\n"
++"        float distance = length(delta);\n"
++"        vec2 axis = delta / max(distance, 0.025);\n"
++"        float radius = mix(i == 1 ? 0.034 : 0.045, i == 1 ? 0.22 : 0.27, age);\n"
++"        float width = i == 1 ? 0.030 : 0.050;\n"
++"        float band = 1.0 - smoothstep(0.0, width, abs(distance - radius));\n"
++"        float core = 1.0 - smoothstep(0.02, i == 1 ? 0.16 : 0.26, distance);\n"
++"        // A compression ridge followed by an opposite distortion on its inner edge.\n"
++"        float crest = band * clamp((distance - radius) / (width * 0.55), -1.0, 1.0);\n"
++"        displacement += axis * crest * envelope * (i == 1 ? 0.010 : 0.023);\n"
++"        blur += axis * max(core * 0.55, band) * envelope * (i == 1 ? 0.013 : 0.030);\n"
++"    }\n"
++"    vec2 inverse_aspect = vec2(1.0 / aspect, 1.0);\n"
++"    // Leave the screen borders and their static HUD controls outside the shock.\n"
++"    vec2 edge = min(uv, vec2(1.0) - uv);\n"
++"    float mask = smoothstep(0.12, 0.22, edge.x) * smoothstep(0.12, 0.22, edge.y);\n"
++"    displacement *= mask;\n"
++"    blur *= mask;\n"
++"    vec2 warped = uv + displacement * inverse_aspect;\n"
++"    vec2 taps = blur * inverse_aspect;\n"
++"    if (dot(displacement, displacement) + dot(blur, blur) < 0.00000001)\n"
++"        return texture(scene, uv).rgb;\n"
++"\n"
++"    return texture(scene, warped).rgb * 0.38\n"
++"         + (texture(scene, warped - taps * 0.46).rgb + texture(scene, warped + taps * 0.46).rgb) * 0.24\n"
++"         + (texture(scene, warped - taps).rgb + texture(scene, warped + taps).rgb) * 0.07;\n"
++"}\n"
++"\n"
++"\n"
++"vec3 radiance_scene(sampler2D scene, vec2 uv, vec4 draw, vec4 contact, vec4 fan, float compare) {\n"
++"    if (compare > 0.5) {\n"
++"        if (uv.x < 0.5) return texture(scene, vec2(uv.x*2.0, uv.y)).rgb;\n"
++"        uv.x = uv.x*2.0-1.0;\n"
++"    }\n"
++"    return radiance_taps(scene, uv, draw, contact, fan);\n"
++"}\n"
+diff --git a/runtime/nvn/vulkan/shaders.c b/runtime/nvn/vulkan/shaders.c
+index 516ccc75a5dae77d0b52d69e5140af1b52c0b68b..09c3c7a077133011e2012e13eb2f39861e6dab72 100644
+--- a/runtime/nvn/vulkan/shaders.c
++++ b/runtime/nvn/vulkan/shaders.c
+@@ -293,15 +293,18 @@ static const char *builtin_src(const char *name, int *stage) {
+                "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+                "layout(location = 0) in vec2 uv;\n"
+                "layout(location = 0) out vec4 o;\n"
+-               "void main() { o = vec4(texture(t, uv).rgb, 1.0); }\n";
++               "layout(push_constant) uniform P { vec4 a; vec4 crop; vec4 h; vec4 draw; vec4 contact; vec4 fan; } pc;\n"
++#include "radiance_glsl.inc"
++               "void main() { o = vec4(radiance_scene(t, uv, pc.draw, pc.contact, pc.fan, pc.a.y), 1.0); }\n";
+     }
+     if (!strcmp(name, "present.frag.hdr")) {  // (exec.c present_pipeline: BT.2020 -> BT.709, in the HDR encoding)
+         *stage = STAGE_FRAGMENT;
+         return "#version 450\n"
+                "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+-               "layout(push_constant) uniform P { vec4 a; vec4 crop; vec4 h; } pc;\n"
++               "layout(push_constant) uniform P { vec4 a; vec4 crop; vec4 h; vec4 draw; vec4 contact; vec4 fan; } pc;\n"
+                "layout(location = 0) in vec2 uv;\n"
+                "layout(location = 0) out vec4 o;\n"
++#include "radiance_glsl.inc"
+                "vec3 spow(vec3 c, float e) { return sign(c) * pow(abs(c), vec3(e)); }\n"
+                "vec3 dec(vec3 c) {\n"
+                "  if (pc.h.x > 0.0) return spow(c, pc.h.x);\n"
+@@ -314,7 +317,7 @@ static const char *builtin_src(const char *name, int *stage) {
+                "  return sign(l) * mix(a * 12.92, 1.055 * pow(a, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), a));\n"
+                "}\n"
+                "void main() {\n"
+-               "  vec3 c = dec(texture(t, uv).rgb);\n"
++               "  vec3 c = dec(radiance_scene(t, uv, pc.draw, pc.contact, pc.fan, pc.a.y));\n"
+                "  c = vec3(dot(vec3(1.6604910, -0.5876411, -0.0728499), c), dot(vec3(-0.1245505, 1.1328999, -0.0083494), c),\n"
+                "           dot(vec3(-0.0181508, -0.1005789, 1.1187297), c));\n"
+                "  o = vec4(enc(c), 1.0);\n"
+diff --git a/runtime/radiance_present.c b/runtime/radiance_present.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..fb403efbeaa5c5553b7877a2143e0eb7042973c3
+--- /dev/null
++++ b/runtime/radiance_present.c
+@@ -0,0 +1,71 @@
++#include "radiance_present.h"
++
++#include <SDL3/SDL.h>
++#include <stdatomic.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++static _Atomic uint64_t pulses[3];
++static const uint32_t tick_mask = (1u << 31) - 1u;
++
++static uint32_t hexadecimal(const char *s, unsigned digits) {
++    uint32_t result = 0;
++    for (unsigned i = 0; i < digits; ++i) {
++        unsigned char c = (unsigned char)s[i];
++        if (c >= '0' && c <= '9') c -= '0';
++        else if (c >= 'A' && c <= 'F') c -= 'A' - 10;
++        else return UINT32_MAX;
++        result = 16u * result + c;
++    }
++    return result;
++}
++
++bool radiance_present_packet(const char *message, size_t length) {
++    // RFX1 + layer (1 hex digit) + position (6) + age at 480 Hz (3).
++    if (length != 14 || memcmp(message, "RFX1", 4)) return false;
++    uint32_t layer = hexadecimal(message + 4, 1);
++    uint32_t point = hexadecimal(message + 5, 6);
++    uint32_t age = hexadecimal(message + 11, 3);
++    if (layer >= 3 || point == UINT32_MAX || age > 336) return true;
++    if (!(point & 4095) || !(point >> 12)) return true;
++    uint64_t tick = SDL_GetTicks() & tick_mask;
++    uint64_t packet = (tick << 33) | ((uint64_t)age << 24) | point;
++    atomic_store_explicit(&pulses[layer], packet, memory_order_relaxed);
++    return true;
++}
++
++bool radiance_present_compare(void) {
++    const char *mode = getenv("MHGU_RADIANCE_PRESENT");
++    return mode && !strcmp(mode, "compare");
++}
++
++unsigned radiance_present_sample(float controls[12], bool flip) {
++    const char *mode = getenv("MHGU_RADIANCE_PRESENT");
++    if (mode && strcmp(mode, "1") && strcmp(mode, "compare")) return 0;
++    unsigned mask = 0;
++    const uint32_t now = (uint32_t)SDL_GetTicks() & tick_mask;
++    static const float strength[3] = { .85f, .66f, .59f };
++    for (unsigned i = 0; i < 3; ++i) {
++        uint64_t packet = atomic_load_explicit(&pulses[i], memory_order_relaxed);
++        if (!packet) continue;
++        uint32_t elapsed = (now - (uint32_t)(packet >> 33)) & tick_mask;
++        if (elapsed >= 80) {
++            atomic_compare_exchange_strong_explicit(&pulses[i], &packet, 0,
++                                                     memory_order_relaxed, memory_order_relaxed);
++            continue;
++        }
++        uint32_t point = (uint32_t)packet & 0xffffff;
++        float x = ((point & 4095) - 1.f) * (1.5f / 4093.f) - .25f;
++        float y = ((point >> 12) - 1.f) * (1.5f / 4093.f) - .25f;
++        float age = ((packet >> 24) & 0x1ff) / 480.f + elapsed * .001f;
++        if (age >= (i == 1 ? .70f : .20f)) continue;
++        controls[4*i] = x;
++        controls[4*i+1] = flip ? 1.f-y : y;
++        controls[4*i+2] = age;
++        controls[4*i+3] = strength[i];
++        mask |= 1u << i;
++    }
++    return mask;
++}
++
+diff --git a/runtime/radiance_present.h b/runtime/radiance_present.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..5a1b4d17f6169190ca6c29bd8863dbf1e8fdbd42
+--- /dev/null
++++ b/runtime/radiance_present.h
+@@ -0,0 +1,7 @@
++#pragma once
++#include <stdbool.h>
++#include <stddef.h>
++
++bool radiance_present_packet(const char *message, size_t length);
++bool radiance_present_compare(void);
++unsigned radiance_present_sample(float controls[12], bool flip);

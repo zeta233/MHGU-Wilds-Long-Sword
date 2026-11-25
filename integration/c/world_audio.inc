@@ -420,6 +420,9 @@ static void world_audio_tick(void *a)
        (int16_t)u16(a,HP)<=0||u16(a,MOTION)!=0x500+world.slot)return;
 #if ML_WILDS_MOVES
     if(world.source==917||world.source==109)return;
+#if ML_ASCENDANCE_PROTOTYPE
+    if(musou_clip(u16(a,MOTION))||ascendance.double_cut||ascendance_independent_flash()||radiance_pursuit_pose(u16(a,MOTION)))return;
+#endif
     /* Wilds motions 233, 235, 237 and 252 mapped to the GU clip phases.
      * A short vault can go directly from air to landing. Play the swing
      * at that transition if the descent clip was bypassed. */

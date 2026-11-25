@@ -1,4 +1,7 @@
 #include "world_core.h"
+#if ML_ASCENDANCE_PROTOTYPE
+#include "enhanced_sheathe_data.h"
+#endif
 #if ML_WILDS_MOVES
 #include "wilds_combat_data.h"
 #endif
@@ -90,10 +93,24 @@ const WEvent *w_event(unsigned source,float frame)
     while(i<c->count&&e[i].frame<=frame)++i;
     return e+i-1;
 }
+
+float w_next_hit_frame(unsigned source,float frame)
+{
+    const WClip *clip=w_clip(source);
+    const WEvent *active=w_event(source,frame);
+    if(!clip||!active||active->hit>=0)return -1;
+    const WEvent *events=world_events+clip->offset;
+    for(unsigned i=0;i<clip->count;++i)
+        if(events[i].frame>frame&&events[i].hit>=0)return events[i].frame;
+    return 0;
+}
 unsigned w_source(unsigned motion)
 {
     if((motion>>8)!=5)return 0;
     unsigned n=motion-0x500;
+#if ML_ASCENDANCE_PROTOTYPE
+    if(n==ENHANCED_SHEATHE_SLOT)return 306;
+#endif
     for(unsigned i=0;i<sizeof(world_clips)/sizeof(*world_clips);++i)
         if(world_clips[i].slot&&world_clips[i].slot==n)return world_clips[i].source;
     if(n>=101&&n<=108)return n;
@@ -329,6 +346,7 @@ static void spirit_round_reward(WDecision *d,unsigned rank)
 WDecision w_leave(WState *s)
 {
     WDecision d={0};
+    s->foresight_press.motion=0;
     if(s->move==W_GROUND&&s->ground_node==5&&s->hit_success&&!s->rank_paid){
         spirit_round_reward(&d,s->rank);
     }
@@ -339,7 +357,10 @@ WDecision w_leave(WState *s)
 #endif
     if(s->helm_cost_pending&&s->rank)d.rank_delta-=1;
     s->helm_cost_pending=0;s->red_foresight_chain=0;s->wilds_charge_link=0;
+    s->wilds_three_exit_r=s->wilds_three_exit_sample=0;
+    s->wilds_slide_exit_sample=s->wilds_slide_exit_r=s->wilds_slide_weak_r=0;
     s->spirit_crimson_pending=s->spirit_crimson_repeat=0;
+    s->wilds_charge_carry=0;s->wilds_charge_carry_source=s->wilds_charge_carry_action=0;
     s->move=s->bound=s->queued=0;s->source=s->slot=0;s->ground_node=s->main_source=0;return d;
 }
 /* Free movement turns into the stick. Focus holds a camera-relative
@@ -369,6 +390,18 @@ static unsigned crimson_one(const WObservation *o,unsigned *heading,unsigned *di
 }
 #endif
 
+#if ML_WILDS_MOVES
+static void big_counter_rank_reward(const WObservation *o,WDecision *d)
+{
+    if(o->valor_style){
+        if(!o->valor)d->valor_gain=W_VALOR_COUNTER_GAIN;
+    }else if(o->rank<3){
+        d->rank_delta+=1;
+        if(o->rank==2)d->gauge_fill=1;
+    }
+}
+#endif
+
 static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned mask)
 {
     if(o->valor&&(move==W_SHEATHE||move==W_SMALL||move==W_BIG))return (WDecision){0};
@@ -394,6 +427,8 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
         s->source=delta>=8192&&delta<=24576?911:delta<=-8192&&delta>=-24576?910:delta>24576||delta< -24576?912:903;
     }
     s->wilds_tier=1;s->wilds_elapsed=s->wilds_buffer=s->wilds_roll_buffer=s->wilds_r_wait=0;s->wilds_r_pending=0;
+    s->wilds_thrust_buffer=0;
+    s->wilds_red_three_held=0;
     s->wilds_gauge_fraction=0;s->wilds_bridge_hold=0;
     s->wilds_previous=o->base.held;s->wilds_sample=o->base.sample_sequence;
     s->slot=w_clip(s->source)->slot;s->bound=0;s->last_frame=0;
@@ -420,6 +455,13 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
 #endif
     d.source=s->source;d.slot=s->slot;d.heading=s->heading;
 #if ML_WILDS_MOVES
+    if(move==W_RELEASE&&previous==174){
+        /* Keep the planted landing pose in the first part of the turn.
+         * The clip still starts at F0 and its attack clock runs normally. */
+        d.motion_contract=1;
+        d.blend=8;
+        d.speed=1;
+    }
     /* Blend from the native Valor opener only after its guard window ends.
      * Start the slide clock at frame zero so movement and strikes stay in sync. */
     if(move==W_SLIDE && o->valor && o->state==16 && o->base.native_action==130 &&
@@ -431,7 +473,13 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
 #endif
     if(move>=W_RISE&&move<=W_LAND){
         const WMotionLink *link=w_motion_link(d.source,previous,W_BANK_W03_00,o->base.animation_frame);
-        if(link){d.motion_contract=1;d.start=s->entry_start=link->start;d.blend=link->blend;d.speed=link->speed;}
+        if(link){
+            d.motion_contract=1;d.start=s->entry_start=link->start;
+            /* Settle the upper body into recovery while the authored F6
+             * landing clock and input windows continue to run. */
+            d.blend=move==W_LAND&&previous==173?10:link->blend;
+            d.speed=link->speed;
+        }
     }
     if(move==W_FORESIGHT){
         s->foresight_gauge=o->base.gauge>=10;d.gauge_clear=1;
@@ -444,6 +492,32 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
     return d;
 }
 WDecision w_debug_enter(WState *s,const WObservation *o,unsigned move){return enter(s,o,move,0);}
+#if ML_ASCENDANCE_PROTOTYPE
+WDecision w_dividing_spirit_attack(WState *s,const WObservation *o,unsigned keys)
+{
+    return enter(s,o,chord(keys),keys);
+}
+WDecision w_dividing_sheathe(WState *s,const WObservation *o)
+{
+    return enter(s,o,W_SHEATHE,ML_R|ML_B);
+}
+WDecision w_radiance_enter(WState *s,const WObservation *o,unsigned move)
+{
+    return enter(s,o,move,ML_X|ML_A);
+}
+WDecision w_radiance_pursuit_enter(WState *s,const WObservation *o)
+{
+    if(s->move!=W_BIG||!s->counter_success)return (WDecision){0};
+    unsigned rank_pending=!s->rank_paid;
+    unsigned red_pending=s->rank==3&&o->rank==3&&!s->wilds_iai_recovered;
+    WDecision d=w_radiance_enter(s,o,W_THRUST);
+    if(d.kind==W_ENTER){
+        if(rank_pending)big_counter_rank_reward(o,&d);
+        if(red_pending)d.red_recovery|=W_RED_IAI;
+    }
+    return d;
+}
+#endif
 unsigned w_iai_ready(const WState *s,const WObservation *o)
 {
     const MLObservation *b=&o->base;
@@ -453,17 +527,22 @@ unsigned w_iai_ready(const WState *s,const WObservation *o)
     const WEvent *event=w_event(s->source,b->animation_frame);
     return (input_stage(event,WI_R)|input_stage(event,WI_X))&2;
 }
+WDecision w_iai_attack(WState *s,const WObservation *o,unsigned key)
+{
+    const WEvent *event=w_event(s->source,o->base.animation_frame);
+    if(key==ML_R&&(input_stage(event,WI_R)&2))return enter(s,o,W_BIG,ML_R);
+    if(key==ML_X&&(input_stage(event,WI_X)&2))return enter(s,o,W_SMALL,ML_X);
+    return (WDecision){0};
+}
 WDecision w_iai_press(WState *s,const WObservation *o)
 {
 #if ML_WILDS_MOVES && ML_WORLD_INPUT_VM
     const MLObservation *b=&o->base;
     if(w_iai_ready(s,o)&&s->controls.initialized){
-        const WEvent *event=w_event(s->source,b->animation_frame);
         unsigned keys=b->held;
-        if(keys==ML_R&&!(s->consumed&ML_R)&&!s->controls.buttons[2].raw&&
-           input_stage(event,WI_R)&2)return enter(s,o,W_BIG,ML_R);
-        if(keys==ML_X&&!(s->consumed&ML_X)&&!s->controls.buttons[0].raw&&
-           input_stage(event,WI_X)&2)return enter(s,o,W_SMALL,ML_X);
+        if((keys==ML_R&&!(s->consumed&ML_R)&&!s->controls.buttons[2].raw)||
+           (keys==ML_X&&!(s->consumed&ML_X)&&!s->controls.buttons[0].raw))
+            return w_iai_attack(s,o,keys);
     }
 #else
     (void)s;(void)o;
@@ -473,7 +552,8 @@ WDecision w_iai_press(WState *s,const WObservation *o)
 unsigned w_red_draw(const WObservation *o)
 {
     return !o->drawn&&o->rank==3&&o->alive&&o->grounded&&o->resources_ready&&
-        (o->state==1||o->state==2)&&o->base.native_action<=5;
+        (((o->state==1||o->state==2)&&o->base.native_action<=5)||
+         w_uphill_run(o->state,o->base.native_action));
 }
 #if ML_WILDS_MOVES
 unsigned w_sheathed_slide(const WObservation *o)
@@ -497,15 +577,32 @@ WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move)
     if(move==W_RELEASE&&(s->move!=W_LAND||!s->wilds_helm_red||
        o->rank<1+s->helm_cost_pending))return (WDecision){0};
     if(move==W_SLIDE&&!spirit_available(o,10))return (WDecision){0};
-    WDecision d=enter(s,o,move,0);
+    /* A held sprint button belongs to the uphill draw, not its thrust chord. */
+    unsigned uphill_sprint=move==W_CHIJIN&&!o->drawn&&
+        w_red_sprint(o)&&(o->base.held&ML_R);
+    WDecision d=enter(s,o,move,uphill_sprint?ML_R:0);
     if(move==W_RELEASE)d.rank_delta-=1;
     if(move==W_SLIDE&&o->rank!=3)d.gauge_delta-=10;
     return d;
 }
 
+#if ML_WILDS_MOVES
+WDecision w_art_follow(WState *s,const WObservation *o,unsigned keys)
+{
+    if(s->move||!o->alive||!o->grounded||!o->resources_ready)return (WDecision){0};
+    if(keys==ML_X)return w_wilds_enter(s,o,W_CHIJIN);
+    if(!o->drawn)return (WDecision){0};
+    if(keys==(ML_R|ML_Y))return w_wilds_enter(s,o,W_FOCUS);
+    unsigned move=chord(keys);
+    if(!move||(move==W_SHEATHE&&o->valor))return (WDecision){0};
+    return enter(s,o,move,keys);
+}
+#endif
+
 static WDecision combine(WDecision earned,WDecision next)
 {
     next.rank_delta+=earned.rank_delta;
+    next.valor_gain+=earned.valor_gain;
     next.red_recovery|=earned.red_recovery;
     next.gauge_clear|=earned.gauge_clear;next.gauge_fill|=earned.gauge_fill;
     if(earned.regen_seconds>next.regen_seconds)next.regen_seconds=earned.regen_seconds;
@@ -582,6 +679,23 @@ static WDecision ground_enter(WState *s,const WObservation *o,unsigned node,unsi
 }
 #if ML_WORLD_INPUT_VM
 #include "world_command_driver.inc"
+#if ML_WILDS_MOVES
+WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two)
+{
+    if(s->move||!o->alive||!o->drawn||!o->grounded||!o->resources_ready||o->valor)
+        return (WDecision){0};
+    if(o->base.magnitude>=50){
+        if(moving_two&&spirit_available(o,15)){
+            wilds_spirit_direction(s,&o->base);
+            return wilds_moving_spirit_two(s,o);
+        }
+        WDecision d=w_wilds_enter(s,o,W_SLIDE);
+        if(d.kind!=W_KEEP)return d;
+        return wilds_directional_weak_spirit(s,o);
+    }
+    return wilds_native(s,o,spirit_available(o,15)?16:17);
+}
+#endif
 #endif
 void w_input_finish(WState *s,const WObservation *o,WDecision d)
 {
@@ -626,7 +740,7 @@ WDecision w_step(WState *s,const WObservation *o)
 #if ML_WILDS_MOVES
     sheathing|=(s->source==917&&b->animation_frame>=W_ROUND_SHEATHE_FRAME)||(s->source==904&&b->animation_frame>=W_RELEASE_SHEATHE_FRAME);
 #endif
-    if(!o->alive||(!o->drawn&&!sheathing)||!o->resources_ready){if(!s->move){s->controls=(WControls){0};s->wilds_charge_link=0;s->wilds_charge_open=0;s->wilds_chain_source=0;s->spirit_crimson_pending=0;return d;}d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
+    if(!o->alive||(!o->drawn&&!sheathing)||!o->resources_ready){if(!s->move){s->controls=(WControls){0};s->foresight_press.motion=0;s->wilds_charge_link=0;s->wilds_charge_open=0;s->wilds_chain_source=0;s->spirit_crimson_pending=0;return d;}d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
     w_keys_tick(&s->keys,b);
     if(s->move&&!w_private(o->state,b->native_action)){d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
     unsigned new_sample=s->sample!=b->sample_sequence;
@@ -644,7 +758,12 @@ WDecision w_step(WState *s,const WObservation *o)
             s->hit_success=1;
             if(s->valor_foresight&&s->source==918)d.regen_seconds=15;
             if(s->move==W_SMALL)d.regen_seconds=s->counter_success?30:15;
-            if(s->move==W_FORESIGHT&&s->source!=918&&s->counter_success)d.gauge_fill=1;
+            if(s->move==W_FORESIGHT&&s->source!=918&&s->counter_success){
+                d.gauge_fill=1;
+#if ML_WILDS_MOVES
+                if(o->valor_style&&!o->valor)d.valor_gain=W_VALOR_COUNTER_GAIN;
+#endif
+            }
         }
         if(s->move==W_CHARGE&&(s->source==917||s->source==W_CRIMSON_SPIN)&&s->hit_success&&!s->rank_paid){
             s->rank_paid=1;spirit_round_reward(&d,o->rank);
@@ -653,7 +772,7 @@ WDecision w_step(WState *s,const WObservation *o)
 #if ML_WILDS_MOVES
             if(s->counter_success){
                 s->rank_paid=1;
-                if(o->rank<3){d.rank_delta+=1;if(o->rank==2)d.gauge_fill=1;}
+                big_counter_rank_reward(o,&d);
             }
 #else
             s->rank_paid=1;if(!s->counter_success&&s->rank)d.rank_delta=-1;

@@ -8,6 +8,48 @@ static void *world_blade_resource,*world_thrust_resources[2];
 static void *world_foresight_resources[3];
 
 static float world_big_started,world_big_line_birth;
+typedef struct {
+    void *effect;
+    void **vtable;
+    u32 identity,resource;
+    float until;
+} WIaiLineTail;
+static WIaiLineTail world_iai_tails[24];
+
+static void world_iai_track_tail(void *effect,unsigned uid)
+{
+    if(!effect||world.move!=W_BIG)return;
+    if(uid!=0x3f6b&&uid!=0x3f70&&uid!=0x3f71&&uid!=0x3fc4&&
+       !(uid>=0x3f75&&uid<=0x3f7b))return;
+    void **vtable=*(void ***)effect;
+    if(!vtable)return;
+    WIaiLineTail *available=0;
+    for(unsigned i=0;i<sizeof(world_iai_tails)/sizeof(*world_iai_tails);++i){
+        WIaiLineTail *line=world_iai_tails+i;
+        if(line->effect==effect){available=line;break;}
+        if(!available&&!line->effect)available=line;
+    }
+    if(available)*available=(WIaiLineTail){effect,vtable,word(effect,8),word(effect,244),world_elapsed+.90f};
+}
+
+static void world_iai_expire_tails(void *a)
+{
+    unsigned manager_valid=world_sfx_manager&&*(void **)(main_base+0x18509e8)==world_sfx_manager;
+    for(unsigned i=0;i<sizeof(world_iai_tails)/sizeof(*world_iai_tails);++i){
+        WIaiLineTail *line=world_iai_tails+i;
+        void *effect=line->effect;
+        if(!effect)continue;
+        if(!manager_valid){line->effect=0;continue;}
+        if(world_elapsed+.0001f<line->until)continue;
+        line->effect=0;
+        if(*(void ***)effect!=line->vtable||word(effect,8)!=line->identity||
+           word(effect,244)!=line->resource)continue;
+        /* The native effect vtable ends emission and releases live geometry. */
+        ((void (*)(void *))line->vtable[0xa4/4])(effect);
+        ((void (*)(void *))line->vtable[0x40/4])(effect);
+        log_event("world_iai_tail_end",(u32)(uptr)a,(u32)(uptr)effect,0,0);
+    }
+}
 #include "world_iai_stroke.h"
 static void world_fx_begin(void *a){
     (void)a;world_sfx_seen=0;world_sfx_hit=-1;
@@ -40,6 +82,7 @@ static void world_sfx_oriented(void *a,const float *point,unsigned uid,const flo
     uptr *vt=*(uptr **)a;
     uptr effect=((uptr (*)(void *,void *,u32,u32,void *,uptr))vt[0x138/4])
         (a,world_sfx_handle,2,uid,request,word(a,0x3310));
+    world_iai_track_tail((void *)effect,uid);
     ((void (*)(void *))(main_base+0x40b50))(request);
     log_event("world_simple_fx_emit",(u32)(uptr)a,uid,world.source,effect!=0);
     if(uid==0x3f81)log_event("world_helm_line_direction",(u32)(uptr)a,word(world_helm_blade,32),word(world_helm_blade,36),word(world_helm_blade,40));
@@ -115,15 +158,16 @@ static int world_poly_update(void *g)
     unsigned res=word(effect,244);
     if(!res)return live;
     if(res==(u32)(uptr)world_counter_core[0]||res==(u32)(uptr)world_counter_core[1]||res==(u32)(uptr)world_counter_core[2]){
-        if(byte(particle,125)!=2)return live;
-        unsigned frames=word(particle,20);
-        float age=(frames?frames-1:0)/60.0f;
-        float *vertices=(float *)((uptr)particle+u16(g,212));
-        /* Particle age keeps the cast stroke fading when a follow-up changes motion. */
-        world_iai_stroke(vertices,age);
-        if(world.move==W_BIG&&world_bound&&!(world_sfx_seen&(1u<<18))){
-            world_sfx_seen|=1u<<18;
-            log_event("world_counter_ribbon",world_bound_actor,world.rank,frames,(u32)(1000*age));
+        for(void *p=particle;p;p=(void *)(uptr)word(p,4)){
+            if(byte(p,125)!=2)continue;
+            unsigned frames=word(p,20);
+            float age=(frames?frames-1:0)/60.0f;
+            /* Particle age keeps fading after a follow-up changes motion. */
+            world_iai_stroke((float *)((uptr)p+u16(g,212)),age);
+            if(world.move==W_BIG&&world_bound&&!(world_sfx_seen&(1u<<18))){
+                world_sfx_seen|=1u<<18;
+                log_event("world_counter_ribbon",world_bound_actor,world.rank,frames,(u32)(1000*age));
+            }
         }
         return live;
     }
@@ -180,8 +224,12 @@ static int world_poly_update(void *g)
     return live;
 }
 #include "world_helm_iai_fx.inc"
+#if ML_ASCENDANCE_PROTOTYPE && ML_WILDS_MOVES
+#include "world_radiance_fx.inc"
+#endif
 static void world_fx_tick(void *a)
 {
+    world_iai_expire_tails(a);
     if(world_sfx_failed)return;
     world_helm_line_tick(a);
     if(!world_sfx_archive){
@@ -260,6 +308,26 @@ static void world_fx_tick(void *a)
     if(flash&&world_joint47(a,point)){
         world_sfx_emit(a,point,0x3f60);log_event("world_simple_fx_flash",(u32)(uptr)a,world.source,(u32)(frame*1000),0);
     }
+#if ML_ASCENDANCE_PROTOTYPE
+    if(ascendance_independent_flash()){
+        if(frame>=RADIANCE_FLASH_HIT_BEGIN&&frame<RADIANCE_FLASH_HIT_END&&!(world_sfx_seen&(1u<<20))){
+            void *weapon=(void *)(uptr)word(a,0x23a0);
+            const float *blade=weapon&&word(weapon,0x30)==(u32)(uptr)a?world_bone(weapon,0):0;
+            if(blade){
+                for(unsigned k=0;k<3;++k)point[k]=blade[12+k]+blade[8+k]*70;
+                world_sfx_seen|=1u<<20;
+                world_sfx_oriented(a,point,0x3f61,blade);
+                world_sfx_emit(a,point,0x3f60);
+                log_event("radiance_flash_cut_fx",(u32)(uptr)a,(u32)(1000*frame),bind_generation,0);
+#if ML_WILDS_MOVES
+                world_radiance_flash_fx(a,frame);
+#endif
+            }
+        }
+        return;
+    }
+    if(musou_clip(u16(a,MOTION))||ascendance.double_cut||radiance_pursuit_pose(u16(a,MOTION)))return;
+#endif
     const WEvent *event=w_event(world.source,frame);
     if(!event||event->hit<0||event->hit==world_sfx_hit)return;
     world_sfx_hit=event->hit;

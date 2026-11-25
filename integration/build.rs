@@ -11,6 +11,11 @@ fn main(){
     let any_style=env::var("ML_TEST_ANY_STYLE").as_deref()==Ok("1");
     println!("cargo:rerun-if-env-changed=ML_TEST_ANY_STYLE");
     println!("cargo:rerun-if-env-changed=ML_WILDS_MOVES");
+    let ascendance=env::var("ML_ASCENDANCE_PROTOTYPE").as_deref()==Ok("1");
+    assert!(!ascendance||(combat&&wilds),"Ascendance prototype requires Wilds combat");
+    println!("cargo:rerun-if-env-changed=ML_ASCENDANCE_PROTOTYPE");
+    println!("cargo:rustc-check-cfg=cfg(ml_ascendance_prototype)");
+    if ascendance { println!("cargo:rustc-cfg=ml_ascendance_prototype"); }
     println!("cargo:rerun-if-env-changed=ML_DEBUG_FORCE");
     let input_vm=env::var("ML_WORLD_INPUT_VM").as_deref()==Ok("1");
     assert!(!input_vm||combat,"World input VM requires the combat build");
@@ -41,6 +46,10 @@ fn main(){
     println!("cargo:rustc-check-cfg=cfg(ml_attachment_preview)");
     if preview { println!("cargo:rustc-cfg=ml_animation_preview"); }
     if attachments { println!("cargo:rustc-cfg=ml_attachment_preview"); }
+    let art_fixture=env::var("ML_ART_FIXTURE").as_deref()==Ok("1");
+    println!("cargo:rerun-if-env-changed=ML_ART_FIXTURE");
+    let trace_events=env::var("ML_TRACE_EVENTS").as_deref()==Ok("1");
+    println!("cargo:rerun-if-env-changed=ML_TRACE_EVENTS");
     for name in ["moveset","world_core","gu_adapter"]{
         let obj=out.join(format!("{name}.o"));
         let status=Command::new(&gcc).arg(if preview {"-DML_ANIMATION_PREVIEW=1"} else {"-DML_ANIMATION_PREVIEW=0"})
@@ -48,12 +57,15 @@ fn main(){
             .arg(if combat {"-DML_WORLD_COMBAT=1"} else {"-DML_WORLD_COMBAT=0"})
             .arg(if debug_force {"-DML_DEBUG_FORCE=1"} else {"-DML_DEBUG_FORCE=0"})
             .arg(if wilds {"-DML_WILDS_MOVES=1"} else {"-DML_WILDS_MOVES=0"})
+            .arg(if ascendance {"-DML_ASCENDANCE_PROTOTYPE=1"} else {"-DML_ASCENDANCE_PROTOTYPE=0"})
             .arg(if any_style {"-DML_TEST_ANY_STYLE=1"} else {"-DML_TEST_ANY_STYLE=0"})
             .arg(if input_vm {"-DML_WORLD_INPUT_VM=1"} else {"-DML_WORLD_INPUT_VM=0"})
             .arg(if audio_probe {"-DML_WORLD_AUDIO_PROBE=1"} else {"-DML_WORLD_AUDIO_PROBE=0"})
             .arg(if fx_probe {"-DML_WORLD_FX_PROBE=1"} else {"-DML_WORLD_FX_PROBE=0"})
             .arg(if presentation {"-DML_WORLD_PRESENTATION=1"} else {"-DML_WORLD_PRESENTATION=0"})
-            .arg(format!("-I{dir}/c"))
+            .arg(if art_fixture {"-DML_ART_FIXTURE=1"} else {"-DML_ART_FIXTURE=0"})
+            .arg(if trace_events {"-DML_TRACE_EVENTS=1"} else {"-DML_TRACE_EVENTS=0"})
+            .arg(format!("-I{dir}/motion-headers"))
             .args(["-mcpu=cortex-a8","-marm","-mfloat-abi=softfp","-mfpu=vfpv3-d16","-O2","-fPIC","-ffreestanding","-fno-builtin","-fno-common","-Wall","-Wextra","-I"])
             .arg(format!("{dir}/c")).arg("-c").arg(format!("{dir}/c/{name}.c")).arg("-o").arg(&obj).status().unwrap();
         assert!(status.success(),"C compilation failed: {name}");
@@ -62,5 +74,5 @@ fn main(){
     println!("cargo:rustc-link-arg=-T{dir}/link/switch32.ld");
     println!("cargo:rustc-link-arg=-Wl,--build-id=sha1");
     println!("cargo:rerun-if-changed=c");
-    if attachments || combat {println!("cargo:rerun-if-changed={dir}/c/attachment_data.h");}
+    if attachments || combat {println!("cargo:rerun-if-changed={dir}/motion-headers/attachment_data.h");}
 }

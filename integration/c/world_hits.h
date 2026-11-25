@@ -1,7 +1,12 @@
 /* Locally generated appended records; stock rows stay byte-identical. */
 #pragma once
 typedef struct {unsigned source,hit,shape;} WHit;
+enum { DIVIDING_NORMAL_HIT=9348, MUSOU_SPIN_FOLLOW_HIT=9349 };
 static const WHit world_hits[]={
+#if ML_ASCENDANCE_PROTOTYPE
+ {DIVIDING_NORMAL_HIT,200u,6u},
+ {MUSOU_SPIN_FOLLOW_HIT,97u,5u},
+#endif
  {40u,85u,3u},
  {42u,86u,4u},
  {43u,87u,3u},
