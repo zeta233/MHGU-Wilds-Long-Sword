@@ -55,6 +55,10 @@ extern "C" fn ml_ascendance_gauge(value: u32) { ASCENDANCE_GAUGE.store(value, Or
 static WILDS_WOUNDS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
 #[cfg(ml_world_combat)]
 static WILDS_LOCK_HINT: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(ml_world_combat, ml_wilds_moves, ml_recomp_runtime))]
+unsafe extern "C" { fn ml_hud_right_offset() -> u32; }
+#[cfg(all(ml_world_combat, ml_wilds_moves, not(ml_recomp_runtime)))]
+unsafe extern "C" { fn ml_hud_native_crop() -> u32; }
 #[cfg(ml_world_combat)]
 #[unsafe(no_mangle)]
 extern "C" fn ml_wilds_charge(value: u32) { WILDS_CHARGE.store(value, Ordering::Relaxed); }
@@ -100,6 +104,17 @@ fn draw_gauge_glow() {
     #[cfg(not(ml_ascendance_prototype))]
     let boost = 0;
     let size = context::get_io().DisplaySize;
+    #[cfg(all(ml_wilds_moves, not(ml_recomp_runtime)))]
+    let size = {
+        let crop = unsafe { ml_hud_native_crop() };
+        if crop != 0 {
+            let width = (crop & 0xffff) as f32;
+            let height = (crop >> 16) as f32;
+            ImVec2::new(width.min(size.x), height.min(size.y))
+        } else {
+            size
+        }
+    };
     let scale = (size.x / 640.0).min(size.y / 360.0);
     let left = (size.x - 640.0 * scale) * 0.5;
     let top = (size.y - 360.0 * scale) * 0.5;
@@ -137,7 +152,14 @@ fn draw_gauge_glow() {
         }
     }
     if lock_hint != 0 {
-        let x = left + 600.0 * scale;
+        #[cfg(all(ml_wilds_moves, ml_recomp_runtime))]
+        let right_offset = if size.x > size.y * (16.0 / 9.0) {
+            let offset = unsafe { ml_hud_right_offset() } as f32 * (size.y / 65536.0);
+            offset.min(left)
+        } else { 0.0 };
+        #[cfg(not(all(ml_wilds_moves, ml_recomp_runtime)))]
+        let right_offset = 0.0;
+        let x = left + 600.0 * scale + right_offset;
         let y = top + 41.5 * scale;
         dl.add_rect_filled(ImVec2::new(x - 7.0 * scale, y - 5.5 * scale),
             ImVec2::new(x + 7.0 * scale, y + 5.5 * scale), color(23, 29, 35, 245), 2.0 * scale);

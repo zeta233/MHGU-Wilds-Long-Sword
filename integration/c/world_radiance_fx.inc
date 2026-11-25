@@ -61,7 +61,9 @@ static unsigned world_radiance_project(const float *point,unsigned view)
     return x|(y<<12);
 }
 
+#if ML_RECOMP_RUNTIME
 #include "radiance_packet.inc"
+#endif
 
 static void world_radiance_overlay(void *a,void *camera)
 {
@@ -80,7 +82,9 @@ static void world_radiance_overlay(void *a,void *camera)
         unsigned start=world_radiance_project(effect->position,(unsigned)view);
         if(!start)continue;
         unsigned finish=world_radiance_project(end,(unsigned)view);
+#if ML_RECOMP_RUNTIME
         world_radiance_packet(layer,start,(u32)(age*480));
+#endif
         if(layer!=RADIANCE_CONTACT||age<.36f)ml_radiance_screen(layer,start,finish,(u32)(age*480));
         if(!effect->shown){
             effect->shown=1;

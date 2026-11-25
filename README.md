@@ -1,12 +1,18 @@
 # 荒野太刀 · 凌越扩展 · MHGU Recomp
 
-将《怪物猎人 荒野》的太刀动作移植到 Windows 版 MHGU Recomp，支持公会与勇气风格。公会和勇气普通模式可使用特殊纳刀、居合和见切。勇气蓝刃可以使用刚气刃 GP、赤刃连段和消耗勇气槽的红刃见切。
+将《怪物猎人 荒野》的太刀动作移植到 MHGU，支持公会与勇气风格。公会和勇气普通模式可使用特殊纳刀、居合和见切。勇气蓝刃可以使用刚气刃 GP、赤刃连段和消耗勇气槽的红刃见切。
 
 ## 安装与按键
 
 保存并退出游戏，使用 Windows 版 MHGU Recomp 0.17.9 和 Switch Forge v1.5.1 前置。将完整安装包中的 Wilds-LS-World 文件夹解压到游戏的 mods 目录。更新前先将旧版移出 mods 备份。光辉闪斩与追击二刀的屏幕径向模糊和折射需要同一发布页提供的 Recomp 后处理补丁。
 
 [下载完整包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/latest) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
+
+## v0.261 更新
+
+- 修复 Windows Recomp 超宽屏下 `R3` 锁定提示与原生 HUD 的错位。超宽屏边缘定位需要同时安装新版模组与后处理补丁。
+- 增加 MHGU 1.4.0 的 Eden 和 Switch 兼容测试包。Eden 0.2.1 已在公会太刀训练任务中复测模式切换，护腕、集中准星和 `R3` 提示随当前画面定位。
+- Switch Atmosphère 包待实体机验证。两个测试包均附有安装、回退和 Switch 手柄按键说明。 [模拟器与 Switch 安装说明](模拟器与Switch安装说明.txt)
 
 ## v0.260 更新
 

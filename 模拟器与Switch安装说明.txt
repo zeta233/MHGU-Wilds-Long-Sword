@@ -1,0 +1,19 @@
+荒野太刀 · 凌越扩展 v0.261 兼容测试版
+
+适用游戏是《Monster Hunter Generations Ultimate》1.4.0，Title ID 0100770008DD8000。请先准备已能在该环境加载插件的 MHGU Forge 1.5.1，并留一套有效的 Forge 前置。
+
+Eden 模拟器
+
+1. 关闭游戏，在 Eden 中右键 GU，打开模组数据目录。
+2. 将旧 Wilds-LS-World 移出模组目录备份，再放入测试包内的整个 Wilds-LS-World 文件夹。
+3. 启动游戏并在模拟器日志中检查 Forge 是否初始化了 mhw_ls_rebuild.nro。Eden 0.2.1 测试用的硬件兼容 Forge 构建为 1.5.1-gbbc540f。若 Eden 在系统键盘处停住，可将该游戏的 Software Keyboard Applet 设为 LLE 后重启。
+
+已在公会风格太刀训练任务复测掌机与主机模式切换。增幅护腕、集中准星和 R3 提示会按当前游戏画面定位。
+
+Switch 实体机
+
+1. 退出游戏并备份 SD 卡上现有的 atmosphere/contents/0100770008DD8000 目录。
+2. 保留已经可用的 Forge 前置，把包内 atmosphere 文件夹合并到 SD 卡根目录。插件应位于 atmosphere/contents/0100770008DD8000/romfs/nativeNX/plugins/mhw_ls_rebuild.nro。
+3. 回退时退出游戏并还原第 1 步的备份。实体 Switch 的上机测试待验证。
+
+按键见《安装与按键说明.txt》。模拟器和 Switch 构建沿用 Forge 绘制护腕、提示与前景特效。Vulkan 屏幕径向模糊、折射以及超宽界面锚点接口由 Windows Recomp 后处理程序提供。

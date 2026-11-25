@@ -1,5 +1,5 @@
 diff --git a/runtime/kernel.c b/runtime/kernel.c
-index d30c869a3553f47775aed165f3ebb7221b62b9fb..375d8458ac801bcff84f4ff4072191a2d9d9f42e 100644
+index d30c869a3553f47775aed165f3ebb7221b62b9fb..45eea66ce4ab4b11a2d4700941a438f47ce8ce10 100644
 --- a/runtime/kernel.c
 +++ b/runtime/kernel.c
 @@ -1,3 +1,4 @@
@@ -7,7 +7,15 @@ index d30c869a3553f47775aed165f3ebb7221b62b9fb..375d8458ac801bcff84f4ff4072191a2
  // A small Horizon kernel for an AArch32 process: handles, threads, synchronization, memory, and the SVC
  // dispatcher. Register usage follows the 32-bit SVC ABI (the SDK's svc stubs: 64-bit values in register pairs,
  // fifth and later arguments in r4+).
-@@ -482,6 +483,7 @@ out:
+@@ -8,6 +9,7 @@
+ 
+ #include "hle.h"
+ #include "kernel.h"
++#include "config.h"
+ 
+ // ------------------------------------------------------------------ results
+ #define R_OK_ 0
+@@ -482,6 +484,7 @@ out:
  
  // ------------------------------------------------------------------ SVC dispatch
  static void debug_string(uint32_t p, uint32_t len) {
@@ -15,6 +23,18 @@ index d30c869a3553f47775aed165f3ebb7221b62b9fb..375d8458ac801bcff84f4ff4072191a2
      fprintf(stderr, "[guest] %.*s", (int)len, gstr(p));
      if (len && gstr(p)[len - 1] != '\n') fputc('\n', stderr);
  }
+@@ -511,6 +514,11 @@ static uint64_t get_info(uint32_t id0, uint32_t handle, uint64_t id1, uint32_t *
+     case 16: case 17: return 0;
+     case 18: return TITLE_ID;
+     case 20: return 0;
++    // Right-hand HUD translation beyond 16:9, in Q16 units of picture height.
++    case 0x4D485549u: {
++        const float extra = g_ui_anchor_aspect - 16.0f / 9.0f;
++        return extra > 0.0f ? (uint32_t)(extra * 32768.0f + 0.5f) : 0;
++    }
+     default:
+         *res = R_INVALID_ENUM;
+         LOG("[kernel] GetInfo unknown id %u/%llu\n", id0, (unsigned long long)id1);
 diff --git a/runtime/nvn/vulkan/device.c b/runtime/nvn/vulkan/device.c
 index c093b9fdc4837ea0a50e7001b1a7cbe9757bb4dc..13b9ffe34124285a700c5a6450507816434138ea 100644
 --- a/runtime/nvn/vulkan/device.c

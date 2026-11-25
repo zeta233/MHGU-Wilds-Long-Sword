@@ -23,6 +23,33 @@ static NativeCall world_original_pad_map;
 static NativeCall world_original_target_selection;
 static u32 (*world_original_target_panel)(void *);
 extern void ml_wilds_lock_hint(unsigned);
+
+#if ML_RECOMP_RUNTIME
+unsigned ml_hud_right_offset(void)
+{
+    static unsigned unsupported;
+    if(unsupported)return 0;
+    register u32 r0 __asm__("r0")=0;
+    register u32 r1 __asm__("r1")=0x4D485549u;
+    register u32 r2 __asm__("r2")=0;
+    register u32 r3 __asm__("r3")=0;
+    __asm__ volatile("svc #0x29":"+r"(r0),"+r"(r1),"+r"(r2),"+r"(r3)::"cc");
+    if(r0||r2){unsupported=1;return 0;}
+    return r1;
+}
+#else
+unsigned ml_hud_native_crop(void)
+{
+    const void *renderer=(const void *)(uptr)word((const void *)main_base,0x2126998);
+    if(!renderer)return 0;
+    /* The game stores the size applied to nvnWindowSetCrop here. Forge's
+     * ImGui DisplaySize tracks the full swapchain texture. */
+    unsigned width=word(renderer,184),height=word(renderer,188);
+    if(width<640||width>3840||height<360||height>2160||width*9!=height*16)return 0;
+    return (height<<16)|width;
+}
+#endif
+
 static void *world_local_hunter(void)
 {
     void *players=(void *)(uptr)word((void *)main_base,0x1885b58);
