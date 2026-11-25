@@ -61,6 +61,9 @@ typedef struct {
     struct {
         unsigned motion,action,generation;
     } foresight_press;
+    struct {
+        unsigned motion,generation,held,pending;
+    } round_follow;
     unsigned queued_word,queued_shift,queued_heading;
     unsigned counter_success,hit_success,rank_paid,follow_ready;
     unsigned helm_cost_pending;
@@ -202,7 +205,7 @@ unsigned w_native_roll(unsigned state,unsigned action);
 void w_reset(WState *s);
 WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move);
 WDecision w_art_follow(WState *s,const WObservation *o,unsigned keys);
-WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two);
+WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsigned charge);
 WDecision w_iai_press(WState *s,const WObservation *o);
 WDecision w_iai_attack(WState *s,const WObservation *o,unsigned key);
 unsigned w_iai_ready(const WState *s,const WObservation *o);

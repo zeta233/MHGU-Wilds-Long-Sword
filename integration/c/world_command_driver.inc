@@ -293,6 +293,8 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
     }
     WDecision foresight=w_foresight_press(s,o);
     if(foresight.kind!=W_KEEP)return foresight;
+    WDecision spin=wilds_round_spin(s,o);
+    if(spin.kind!=W_KEEP)return spin;
     /* Native recovery owns the cancel window. Capture X before GU can
      * queue a regular thrust or mistake the tail of Spirit I's R for a chord. */
     unsigned spirit_one=!s->move&&w_spirit_one_crimson_source(o->state,b->native_action,b->motion);

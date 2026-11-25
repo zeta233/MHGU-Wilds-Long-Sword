@@ -379,13 +379,30 @@ static WDecision wilds_bridge(WState *s,const WObservation *o,unsigned source)
     }
     return (WDecision){0};
 }
-static unsigned wilds_red_follow_r(WState *s,const MLObservation *b,unsigned edge,float cancel)
+static WDecision wilds_round_spin(WState *s,const WObservation *o)
 {
-    if(b->held&~ML_R)s->wilds_r_pending=0;
-    else if((edge&ML_R)&&b->held==ML_R&&b->animation_frame+15>=cancel){
-        s->wilds_r_pending=1;s->wilds_r_wait=.32f;
+    const MLObservation *b=&o->base;
+    unsigned cancel=0;
+    if(o->state==16&&o->grounded&&o->drawn&&!o->valor_style){
+        if(s->source==109&&s->red_foresight_chain)cancel=50;
+        else if(s->source==917)cancel=wilds_clip(917)->cancel;
+        else if(!s->move&&b->native_action==30&&b->motion==0x500+127)cancel=50;
     }
-    return b->animation_frame>=cancel&&s->wilds_r_pending&&s->wilds_r_wait>0;
+    if(!cancel){s->round_follow.motion=0;return (WDecision){0};}
+    if(s->round_follow.motion!=b->motion||s->round_follow.generation!=b->bind_generation){
+        s->round_follow=(__typeof__(s->round_follow)){.motion=b->motion,
+            .generation=b->bind_generation,.held=b->held};
+    }
+    unsigned edge=b->held&~s->round_follow.held;
+    s->round_follow.held=b->held;
+    if(o->rank!=3||(b->held&~ML_R))s->round_follow.pending=0;
+    else if((edge&ML_R)&&b->animation_frame+15>=cancel)s->round_follow.pending=1;
+    if(!s->round_follow.pending||b->animation_frame<cancel||b->motion_finished)
+        return (WDecision){0};
+    WDecision d=enter(s,o,W_CHARGE,ML_R);
+    s->red_foresight_chain=1;s->wilds_tier=s->wilds_stage=4;
+    d.source=s->source=W_CRIMSON_SPIN;d.slot=s->slot=w_clip(W_CRIMSON_SPIN)->slot;
+    return d;
 }
 
 static WDecision wilds_red_round_step(WState *s,const WObservation *o)
@@ -394,13 +411,6 @@ static WDecision wilds_red_round_step(WState *s,const WObservation *o)
     if(s->wilds_sample==b->sample_sequence)return (WDecision){0};
     s->wilds_sample=b->sample_sequence;
     unsigned edge=b->held&~s->wilds_previous;s->wilds_previous=b->held;
-    if(b->simulation_delta>0&&b->simulation_delta<30)s->wilds_r_wait-=b->simulation_delta/60;
-    if(wilds_red_follow_r(s,b,edge,50)&&o->rank==3){
-        WDecision d=enter(s,o,W_CHARGE,ML_R);
-        s->red_foresight_chain=1;s->wilds_tier=4;
-        d.source=s->source=W_CRIMSON_SPIN;d.slot=s->slot=w_clip(W_CRIMSON_SPIN)->slot;
-        return d;
-    }
     if(b->animation_frame>=50&&(edge&ML_X)&&b->held==ML_X&&o->rank==3)
         return w_wilds_enter(s,o,W_CHIJIN);
     if(b->animation_frame>=50&&(edge&ML_B)){

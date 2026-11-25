@@ -7,6 +7,9 @@
 #include "wilds_audio_data.h"
 static uint64_t wilds_audio_seen[2];
 static unsigned wilds_follow_audio_seen;
+#if ML_ASCENDANCE_PROTOTYPE
+static unsigned lingyue_handling_seen;
+#endif
 #else
 #define WILDS_AUDIO_RESOURCE_COUNT WORLD_AUDIO_RESOURCE_COUNT
 #define WILDS_AUDIO_REQUEST_COUNT WORLD_AUDIO_REQUEST_COUNT
@@ -167,6 +170,22 @@ static void world_audio_play(void *a,unsigned request,const float *point)
             (sm,group,world_audio_request,request,a,a);
     log_event("world_audio_play",(u32)(uptr)a,request,(u32)(uptr)world_audio_request,(u32)(world_audio_clock*1000000));
 }
+#if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE
+static void lingyue_attack_sound(void *a,unsigned request)
+{
+    if(!world_audio_ready)return;
+    world_audio_play(a,request,0);
+    log_event("lingyue_swing_audio",(u32)(uptr)a,world.slot,request,(u32)real(a,FRAME));
+}
+
+static void lingyue_handling_sound(void *a,unsigned bit,float frame,unsigned request)
+{
+    if((lingyue_handling_seen&bit)||real(a,FRAME)<frame||world_entry_start>frame)return;
+    lingyue_handling_seen|=bit;
+    world_audio_play(a,request,0);
+    log_event("lingyue_handling_audio",(u32)(uptr)a,world.slot,request,(u32)real(a,FRAME));
+}
+#endif
 #if ML_WILDS_MOVES && ML_WORLD_PRESENTATION
 static unsigned world_audio_impact(unsigned id,enum WAudioImpact impact,unsigned ordinal,const float *point)
 {
@@ -183,6 +202,9 @@ static unsigned world_audio_impact(unsigned id,enum WAudioImpact impact,unsigned
     case W_SOUND_HELM_FOLLOW: requests=wilds_shell_impact_requests;event="wilds_helm_impact_audio";break;
     case W_SOUND_IAI_FOLLOW: requests=wilds_iai_impact_requests;event="wilds_iai_impact_audio";break;
     case W_SOUND_CRIMSON_FINISH: event="wilds_crimson_finish_audio";break;
+    case W_SOUND_LINGYUE_CUT: requests=wilds_combat_blade_impact_requests;event="lingyue_cut_audio";break;
+    case W_SOUND_LINGYUE_FINISH: requests=wilds_iai_impact_requests;event="lingyue_finish_audio";break;
+    case W_SOUND_LINGYUE_RAPID: event="lingyue_rapid_audio";break;
     case W_SOUND_BLADE: break;
     }
     static unsigned last_blade,last_follow;
@@ -212,6 +234,9 @@ static void world_audio_begin(void *a)
 #if ML_WILDS_MOVES
     wilds_audio_seen[0]=wilds_audio_seen[1]=0;
     wilds_follow_audio_seen=0;
+#if ML_ASCENDANCE_PROTOTYPE
+    lingyue_handling_seen=0;
+#endif
 #endif
     for(unsigned i=0;i<sizeof(world_audio_seen)/sizeof(*world_audio_seen);++i)world_audio_seen[i]=0;
     world_audio_actor=(u32)(uptr)a;world_audio_epoch=byte(a,AREA);
@@ -421,7 +446,27 @@ static void world_audio_tick(void *a)
 #if ML_WILDS_MOVES
     if(world.source==917||world.source==109)return;
 #if ML_ASCENDANCE_PROTOTYPE
-    if(musou_clip(u16(a,MOTION))||ascendance.double_cut||ascendance_independent_flash()||radiance_pursuit_pose(u16(a,MOTION)))return;
+    /* Private clips do not share the generic Iai sound track. The strike
+     * callbacks own swings, and handling follows the actual seated pose. */
+    if(ascendance_independent_flash()){
+        lingyue_handling_sound(a,1,4,WILDS_SOUND_DRAW);
+        return;
+    }
+    if(ascendance.double_cut){
+        if(world.slot==DOUBLE_DRAW_RETURN){
+            lingyue_handling_sound(a,1,16,WILDS_SOUND_HANDLING);
+            lingyue_handling_sound(a,2,22,WILDS_SOUND_SHEATH);
+        }
+        return;
+    }
+    if(musou.phase){
+        if(musou.phase==MUSOU_SEAT){
+            lingyue_handling_sound(a,1,52,WILDS_SOUND_HANDLING);
+            lingyue_handling_sound(a,2,58,WILDS_SOUND_SHEATH);
+        }
+        return;
+    }
+    if(dividing_slot(world.slot)||radiance_pursuit_pose(u16(a,MOTION)))return;
 #endif
     /* Wilds motions 233, 235, 237 and 252 mapped to the GU clip phases.
      * A short vault can go directly from air to landing. Play the swing

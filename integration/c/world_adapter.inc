@@ -301,7 +301,8 @@ static void world_audio_epv(void *,unsigned,const float *);
 static void world_audio_blade(void *,const float *);
 #if ML_WILDS_MOVES
 enum WAudioImpact { W_SOUND_CRIMSON_FINISH,W_SOUND_BLADE,W_SOUND_THRUST_BLADE,W_SOUND_HELM_BLADE,
-    W_SOUND_RELEASE_BLADE,W_SOUND_RELEASE_FOLLOW,W_SOUND_HELM_FOLLOW,W_SOUND_IAI_FOLLOW };
+    W_SOUND_RELEASE_BLADE,W_SOUND_RELEASE_FOLLOW,W_SOUND_HELM_FOLLOW,W_SOUND_IAI_FOLLOW,
+    W_SOUND_LINGYUE_CUT,W_SOUND_LINGYUE_FINISH,W_SOUND_LINGYUE_RAPID };
 static unsigned world_audio_impact(unsigned,enum WAudioImpact,unsigned,const float *);
 static unsigned world_helm_wind_played;
 #else
@@ -1032,6 +1033,14 @@ static void world_hit_tick(void *a,const WEvent *e)
 static uint64_t wilds_fired;
 static unsigned wilds_hit_source,wilds_hit_generation,wilds_window=~0u;
 _Static_assert(sizeof(wilds_strikes)/sizeof(*wilds_strikes)<=64,"Wilds strike mask capacity");
+static void wilds_joint_up(void *a,unsigned joint,float *up)
+{
+    const float *m=world_bone(a,joint);
+    if(!m)return;
+    float above[3]={m[12],m[13]+1.f,m[14]};
+    world_inverse(m,above,up);
+}
+
 static void wilds_blade_shape(void *a,const WildsClip *clip,float frame)
 {
     void *resource=(void *)(uptr)word(a,0x319c);
@@ -1042,20 +1051,25 @@ static void wilds_blade_shape(void *a,const WildsClip *clip,float frame)
     unsigned n=(unsigned)frame;if(n>=clip->frames)n=clip->frames-1;
     unsigned next=n+1<clip->frames?n+1:n;float t=frame-(float)n;if(t>1)t=1;
     const float *x=wilds_blade_samples[clip->offset+n],*y=wilds_blade_samples[clip->offset+next];
+    unsigned moving_two=world.move==W_SLIDE&&world.source>=W_SPIRIT_TWO_FORWARD&&world.source<=W_SPIRIT_TWO_BACK;
+    float up[3]={0};
+    if(moving_two)wilds_joint_up(a,12,up);
     for(unsigned sphere=0;sphere<4;++sphere){
         put(bank,offset+sphere*48,12u|(12u<<16));
         unsigned crimson=world.move==W_CHIJIN;
         unsigned focus=world.move==W_FOCUS;
         float radius=world.source==905?38.f+11.f*sphere:focus?35.f+7.f*sphere:world.move==W_RELEASE?30.f+4.f*sphere:crimson?26.f:18.f;
+        if(moving_two)radius=34.f+9.f*sphere;
         set_real(bank,offset+sphere*48+12,radius);
         for(unsigned axis=0;axis<3;++axis){unsigned k=sphere*3+axis;
             float point=x[k]+(y[k]-x[k])*t;
-            if(crimson||focus||world.move==W_RELEASE){
+            if(crimson||focus||world.move==W_RELEASE||moving_two){
                 /* Keep the inner sphere at the grip. Spread the four blade
                  * samples from 20..110 to their move-specific reach along the posed edge. */
                 float grip=x[axis]+(y[axis]-x[axis])*t;
-                point+=(point-grip)*(world.source==905?1.13f:focus?.76f:world.move==W_RELEASE?.54f:57.f/90.f);
+                point+=(point-grip)*(moving_two?.24f:world.source==905?1.13f:focus?.76f:world.move==W_RELEASE?.54f:57.f/90.f);
             }
+            if(moving_two)point+=up[axis]*(-8.f+25.f*sphere);
             set_real(bank,offset+sphere*48+16+axis*4,point);
         }
     }
@@ -1063,8 +1077,18 @@ static void wilds_blade_shape(void *a,const WildsClip *clip,float frame)
 /* The original World thrust collider was authored on GU's left-hand bones.
  * Its Helm entry must follow an actual sword contact, using the same evaluated
  * equipment placement as the visible blade rather than an off-hand capsule. */
-static void wilds_equipment_shape_for(void *a,unsigned pursuit)
+enum WBladeEnvelope { W_BLADE_STANDARD,W_BLADE_PURSUIT_FIRST,W_BLADE_PURSUIT_SECOND,
+                      W_BLADE_RADIANCE_FLASH,W_BLADE_DIVIDING };
+static void wilds_equipment_shape_for(void *a,enum WBladeEnvelope envelope)
 {
+    /* Preserve a low contact at the grip and lift successive spheres toward
+     * the tip. The offsets are world vertical even when the weapon rolls. */
+    static const struct {float base,step,radius,radius_step,lift,lift_step;} profiles[]={
+        [W_BLADE_PURSUIT_FIRST]={24,57,43,10,-12,33},
+        [W_BLADE_PURSUIT_SECOND]={24,60,47,10,-12,35},
+        [W_BLADE_RADIANCE_FLASH]={24,53,36,8,-7,25},
+        [W_BLADE_DIVIDING]={22,53,34,8,-5,25},
+    };
     float pose[12];u32 joint,closed;
     if(world.source==109||world.source==917){
         void *blade=(void *)(uptr)word(a,0x23a0);
@@ -1080,33 +1104,23 @@ static void wilds_equipment_shape_for(void *a,unsigned pursuit)
     float axis[3]={2*(x*z+y*w),2*(y*z-x*w),1-2*(x*x+y*y)};
     unsigned thrust=world.move==W_THRUST;
     float up[3]={0};
-    if(thrust||pursuit){
-        /* Convert world up to the current hand's space so the raised tip
-         * follows a high head even as the wrist rolls during the stab. */
-        const float *m=world_bone(a,joint);
-        if(m){
-            float above[3]={m[12],m[13]+1.f,m[14]};
-            world_inverse(m,above,up);
-        }
-    }
+    if(thrust||envelope!=W_BLADE_STANDARD)wilds_joint_up(a,joint,up);
     for(unsigned i=0;i<4;++i){
         unsigned at=offset+i*48;put(bank,at,joint|(joint<<16));
         float distance=thrust?20.f+44.f*i:25.f+45.f*i;
         float radius=thrust?25.f+10.f*i:22.f;
         float lift=thrust?15.f*i:0.f;
-        if(pursuit){
-            /* Keep a low inner contact and give the outer sweep vertical
-             * overlap in world space, independent of sword roll or slope. */
-            distance=25.f+(pursuit==2?56.f:54.f)*i;
-            radius=(pursuit==2?42.f:38.f)+(pursuit==2?8.f:7.f)*i;
-            lift=-9.f+(pursuit==2?21.f:18.f)*i;
+        if(envelope!=W_BLADE_STANDARD){
+            distance=profiles[envelope].base+profiles[envelope].step*i;
+            radius=profiles[envelope].radius+profiles[envelope].radius_step*i;
+            lift=profiles[envelope].lift+profiles[envelope].lift_step*i;
         }
         set_real(bank,at+12,radius);
         for(unsigned k=0;k<3;++k)
             set_real(bank,at+16+4*k,pose[k]+axis[k]*distance+up[k]*lift);
     }
 }
-static void wilds_equipment_shape(void *a){wilds_equipment_shape_for(a,0);}
+static void wilds_equipment_shape(void *a){wilds_equipment_shape_for(a,W_BLADE_STANDARD);}
 static void wilds_hit_tick(void *a)
 {
     if(!world_bound||u16(a,MOTION)!=0x500+world.slot||u16(a,ACTION)!=w_action(world.move))return;
@@ -1156,6 +1170,9 @@ static void wilds_hit_tick(void *a)
     world_white_stroke(a,1);
 #endif
     wilds_fired|=UINT64_C(1)<<active;
+#if ML_ASCENDANCE_PROTOTYPE && (ML_WORLD_AUDIO_PROBE || ML_WORLD_PRESENTATION)
+    if(world.source==W_CRIMSON_SPIN)lingyue_attack_sound(a,WILDS_SOUND_HELM_CUT);
+#endif
     log_event("wilds_hit_open",(u32)(uptr)a,world.source,row,(u32)frame);
 }
 
@@ -1167,7 +1184,7 @@ static void ascendance_flash_blade(void *a)
     unsigned active=f>=RADIANCE_FLASH_HIT_BEGIN&&f<RADIANCE_FLASH_HIT_END;
     int hit=active?(int)(86+(world.rank>3?0:world.rank)):-1;
     WEvent strike={.hit=hit};
-    if(active)wilds_equipment_shape(a);
+    if(active)wilds_equipment_shape_for(a,W_BLADE_RADIANCE_FLASH);
     unsigned opening=active&&world_hit!=hit;
     world_hit_tick(a,&strike);
     if(!active||!world_attack_owned)return;
@@ -1175,7 +1192,8 @@ static void ascendance_flash_blade(void *a)
     if(!opening)return;
     world_blade_hitstop(a,22);
 #if ML_WORLD_AUDIO_PROBE || ML_WORLD_PRESENTATION
-    world_audio_play(a,WILDS_SOUND_IAI_CUT,0);
+    lingyue_attack_sound(a,WILDS_SOUND_IAI_CUT);
+    lingyue_attack_sound(a,WILDS_SOUND_IAI_WHOOSH);
 #endif
 #if ML_WORLD_PRESENTATION
     void *weapon=(void *)(uptr)word(a,0x23a0);
@@ -1201,8 +1219,10 @@ static void ascendance_follow_blade(void *a)
     }
     WEvent strike={.hit=active?(second?65:63):-1};
     if(active){
-        unsigned pursuit=(!ascendance.double_cut&&radiance_pursuit.independent)?second+1:0;
-        wilds_equipment_shape_for(a,pursuit);
+        enum WBladeEnvelope envelope=W_BLADE_STANDARD;
+        if(!ascendance.double_cut&&radiance_pursuit.independent)
+            envelope=second?W_BLADE_PURSUIT_SECOND:W_BLADE_PURSUIT_FIRST;
+        wilds_equipment_shape_for(a,envelope);
     }
     unsigned opening=active&&world_hit!=strike.hit;
     world_hit_tick(a,&strike);
@@ -1211,7 +1231,9 @@ static void ascendance_follow_blade(void *a)
     if(!opening)return;
     world_blade_hitstop(a,second?20:14);
 #if ML_WORLD_AUDIO_PROBE || ML_WORLD_PRESENTATION
-    world_audio_play(a,second?72:71,0);
+    if(ascendance.double_cut)
+        lingyue_attack_sound(a,second?WILDS_SOUND_IAI_WHOOSH:WILDS_SOUND_IAI_CUT);
+    else lingyue_attack_sound(a,second?WILDS_SOUND_HELM_CUT:wilds_swing_requests[0]);
 #endif
 #if ML_WORLD_PRESENTATION
     world_white_stroke(a,0);
@@ -1243,7 +1265,7 @@ static void ascendance_musou_blade(void *a,const MusouStroke *clip)
     if(!opening)return;
     world_blade_hitstop(a,0);
 #if ML_WORLD_AUDIO_PROBE || ML_WORLD_PRESENTATION
-    world_audio_play(a,clip->sound,0);
+    lingyue_attack_sound(a,hit==MUSOU_SPIN_FOLLOW_HIT?WILDS_SOUND_THRUST_CUT:clip->sound);
 #endif
 #if ML_WORLD_PRESENTATION
     void *weapon=(void *)(uptr)word(a,0x23a0);
@@ -1255,6 +1277,15 @@ static void ascendance_musou_blade(void *a,const MusouStroke *clip)
     }
 #endif
     log_event("ascendance_musou_swing",(u32)(uptr)a,clip->slot,musou.stroke,(u32)frame);
+}
+static void lingyue_musou_finish_hit(void *a,const WEvent *event)
+{
+    unsigned opening=event&&event->hit>=0&&world_hit!=event->hit;
+    world_hit_tick(a,event);
+#if ML_WORLD_AUDIO_PROBE || ML_WORLD_PRESENTATION
+    if(opening&&world_attack_owned)
+        lingyue_attack_sound(a,musou.phase==MUSOU_DASH?WILDS_SOUND_HELM_CUT:WILDS_SOUND_IAI_CUT);
+#endif
 }
 #endif
 static void world_bind_motion(void *a)
@@ -1862,7 +1893,7 @@ static void valor_link_collect(void *a,const MLObservation *b,unsigned edge,unsi
 enum {
     ART_SELECTED=10068, ART_SLOT_COUNT=3, ART_REQUEST=0x40,
     ART_COMMANDS=9460, ART_COMMAND_GROUP=100, ART_COMMAND_ACTION=102,
-    ART_RETURN_SAMPLES=44, ART_POST_SAMPLES=24,
+    ART_RETURN_SAMPLES=44, ART_POST_SAMPLES=24, ART_CANCEL_SAMPLES=28,
     ART_R_CHORD_SAMPLES=12,
     ART_SLIDE_SAMPLES=ART_POST_SAMPLES+ART_R_CHORD_SAMPLES
 };
@@ -1905,10 +1936,20 @@ static unsigned world_art_recovery(void *a)
     return 0;
 }
 
+static unsigned world_art_chain(void *a)
+{
+    if(u16(a,STATE)!=16)return 0;
+    unsigned action=u16(a,ACTION);
+    if((action>=51&&action<=54)||action==62)return 1;
+    if(action>=58&&action<=61)return 2;
+    return 0;
+}
+
 static struct {
     void *owner;
     unsigned epoch,sample,keys,route,recovery,heading,input_heading,magnitude;
-    unsigned r_pressed,r_length;
+    unsigned r_pressed,r_length,iai_key,art_chain;
+    float r_ticks;
 } art_return_input;
 
 static unsigned world_art_input_owner(void *a)
@@ -1977,6 +2018,38 @@ static unsigned world_art_keys(void *a)
     return 0;
 }
 
+static unsigned world_art_draw_handoff(unsigned keys)
+{
+    return keys==(ML_R|ML_X)||keys==(ML_R|ML_A)||keys==(ML_R|ML_B)||keys==(ML_R|ML_Y);
+}
+
+static struct {
+    void *owner;
+    unsigned epoch,key,previous;
+} art_iai;
+
+static WDecision world_art_iai(void *a,const WObservation *o)
+{
+    if(art_iai.owner!=a)return (WDecision){0};
+    if(art_iai.epoch!=o->base.epoch||world.move!=W_SHEATHE||!o->alive||
+       !o->grounded||!o->drawn){
+        art_iai.owner=0;
+        return (WDecision){0};
+    }
+    unsigned held=o->base.held;
+    unsigned fresh=held&~art_iai.previous;
+    art_iai.previous=held;
+    if(held&~(ML_R|ML_X|ML_B))art_iai.key=0;
+    else if(fresh&&(held==ML_R||held==ML_X))art_iai.key=held;
+    if(!art_iai.key||!w_iai_ready(&world,o))return (WDecision){0};
+    WDecision d=w_iai_attack(&world,o,art_iai.key);
+    if(d.kind==W_ENTER){
+        log_event("hunter_art_iai",o->base.actor,art_iai.key,d.slot,(u32)o->base.animation_frame);
+        art_iai.owner=0;
+    }
+    return d;
+}
+
 static struct {
     void *owner;
     unsigned epoch,sample,group,action;
@@ -2023,6 +2096,7 @@ static void world_art_poll(void)
 #endif
     world_art_slide_tick(a,art);
     unsigned recovery=art&&world_art_recovery(a);
+    unsigned art_chain=art?world_art_chain(a):0;
     if(recovery)
         art_exit=(__typeof__(art_exit)){a,byte(a,AREA),sample_sequence,route};
     else if(art_exit.owner==a&&(art?art_exit.route!=route:!world_art_post_window(a)))
@@ -2031,6 +2105,8 @@ static void world_art_poll(void)
     unsigned solo=world_art_input_owner(a)&&art_return_input.keys==ML_R;
     if(solo&&held==ML_R){
         art_return_input.r_length=sample_sequence-art_return_input.r_pressed;
+        float delta=real(a,0x1c);
+        if(delta>0&&delta<30)art_return_input.r_ticks+=delta;
         if(art_return_input.magnitude<50){
             MLObservation input=observe(a,1);
             if(input.magnitude>=50){
@@ -2041,7 +2117,32 @@ static void world_art_poll(void)
         }
     }
     unsigned post=!art&&world_art_post_window(a);
+    if(world_art_input_owner(a)&&art_return_input.art_chain){
+        if(art_return_input.art_chain==art_chain){
+            /* Keep the input across Sakura's passes or Mirror's counter. */
+            if(art_return_input.route!=route)art_return_input.recovery=0;
+            art_return_input.route=route;
+            art_return_input.sample=sample_sequence;
+        }else if(!post){
+            art_return_input.owner=0;
+        }
+    }
+    unsigned pending=world_art_input_owner(a)&&sample_sequence-art_return_input.sample<=ART_RETURN_SAMPLES&&
+        ((art&&art_return_input.route==route)||post);
+    if(pending&&recovery&&!art_return_input.recovery){
+        art_return_input.recovery=1;
+        art_return_input.sample=sample_sequence;
+        log_event("hunter_art_return_input",(u32)(uptr)a,u16(a,MOTION),(u32)real(a,FRAME),art_return_input.keys);
+    }
     if((!art&&!post)||!held)return;
+    /* R+B still owns the art exit when the player releases it and queues
+     * their Iai key. A lone R or X without a sheathe chord keeps its old route. */
+    if(pending&&art_return_input.keys==(ML_R|ML_B)&&fresh&&(held==ML_R||held==ML_X)){
+        art_return_input.iai_key=held;
+        art_return_input.sample=sample_sequence;
+        art_return_input.recovery|=post;
+        return;
+    }
     if(!fresh&&(!art_return_input.owner||art_return_input.recovery||
        art_return_input.keys!=held))return;
 
@@ -2051,7 +2152,7 @@ static void world_art_poll(void)
         if(held!=ML_R)art_return_input.owner=0;
         return;
     }
-    if(post&&keys!=ML_X&&!(byte(a,DRAWN)&1))return;
+    if(post&&keys!=ML_X&&!(byte(a,DRAWN)&1)&&!world_art_draw_handoff(keys))return;
     if(!fresh&&(!recovery||!world_art_input_owner(a)||art_return_input.route!=route))return;
     recovery|=post;
     MLObservation input=observe(a,1);
@@ -2063,7 +2164,8 @@ static void world_art_poll(void)
     art_return_input=(__typeof__(art_return_input)){
         a,byte(a,AREA),sample_sequence,keys,route,recovery,input.heading,input.input_heading,input.magnitude,
         keys==ML_R&&solo&&!fresh?art_return_input.r_pressed:sample_sequence,
-        keys==ML_R&&solo&&!fresh?art_return_input.r_length:0};
+        keys==ML_R&&solo&&!fresh?art_return_input.r_length:0,0,art_chain,
+        keys==ML_R&&solo&&!fresh?art_return_input.r_ticks:0};
     if(recovery)
         log_event("hunter_art_return_input",(u32)(uptr)a,u16(a,MOTION),
             (u32)real(a,FRAME),keys);
@@ -2073,17 +2175,20 @@ static unsigned world_art_return(void *a,const MLObservation *o,unsigned art)
 {
     if(art){
         if(art_return_input.owner==a&&art_return_input.recovery&&
-           art_return_input.route!=world_art_route(a))art_return_input.owner=0;
+           art_return_input.route!=world_art_route(a)&&
+           (!art_return_input.art_chain||art_return_input.art_chain!=world_art_chain(a)))
+            art_return_input.owner=0;
         return 0;
     }
     unsigned keys=art_return_input.keys;
     unsigned queued=world_art_input_owner(a)&&art_return_input.recovery&&
         sample_sequence-art_return_input.sample<=ART_RETURN_SAMPLES;
     unsigned state=u16(a,STATE);
-    queued=queued&&(state==1||state==2)&&o->native_action<=5&&!(o->held&~keys)&&
-        !(word(a,AIR)&0x400);
+    queued=queued&&(state==1||state==2)&&o->native_action<=5&&!(o->held&~(keys|art_return_input.iai_key))&&
+        !(word(a,AIR)&0x400)&&(keys!=ML_X||crimson_available(a));
     if(queued&&keys==ML_R&&o->held==ML_R&&
-       art_return_input.r_length<ART_R_CHORD_SAMPLES)
+       (art_return_input.r_length<ART_R_CHORD_SAMPLES||
+        (art_return_input.magnitude<50&&art_return_input.r_ticks<W_SPIRIT_FULL_HOLD_SECONDS*60.f)))
         return 0;
     art_return_input.owner=0;
     return queued?keys:0;
@@ -2248,6 +2353,9 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
         art_return_input.recovery&&sample_sequence-art_return_input.sample<=ART_RETURN_SAMPLES;
     if(native_art||world_art_post_window(a)||art_solo){
         unsigned art_keys=world_art_keys(a);
+        if(world_art_input_owner(a)&&art_return_input.iai_key&&
+           sample_sequence-art_return_input.sample<=ART_RETURN_SAMPLES)
+            art_keys=art_return_input.keys;
         if(!art_keys&&(art_solo||(world_art_input_owner(a)&&art_return_input.route==world_art_route(a))))
             art_keys=art_return_input.keys;
         /* A native cancel can survive release of the pad edge. The art
@@ -2255,7 +2363,7 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
         if(art_keys==ML_R){
             if((native_art||((current==1||current==2)&&current_action<=5))&&
                state==16&&(action==16||action==17))return 1;
-        }else if(art_keys&&(native_art||art_keys==ML_X||(byte(a,DRAWN)&1))&&
+        }else if(art_keys&&(native_art||art_keys==ML_X||(byte(a,DRAWN)&1)||world_art_draw_handoff(art_keys))&&
            ((state==16&&(w_guild_attack(action)||action==41))||
             (state==1&&(action==2||action==6)&&(art_keys&ML_B))))return 1;
         if(native_art)return 0;
@@ -2639,7 +2747,7 @@ static void world_pose_probe(void *a)
 #if ML_WILDS_MOVES
 static struct {
     void *owner;
-    unsigned epoch,generation,sample,slot,dpad;
+    unsigned epoch,generation,sample,slot,dpad,next_motion;
 } art_cancel;
 
 static unsigned native_art_select(void *a)
@@ -2647,15 +2755,47 @@ static unsigned native_art_select(void *a)
     return ((unsigned (*)(void *))(main_base+0x2a8b34))(a);
 }
 
-/* Keep a funded command only if the same move reaches grounded recovery. */
+static unsigned world_art_move_cancel(const WObservation *o)
+{
+    float frame=o->base.animation_frame;
+#if ML_ASCENDANCE_PROTOTYPE
+    if(musou.phase)return musou.phase==MUSOU_SEAT&&frame>=58.f;
+    if(ascendance.double_cut)return world.slot==DOUBLE_DRAW_RETURN&&frame>=22.f;
+    if(ascendance.radiance==RADIANCE_FLASH)return frame>=RADIANCE_FLASH_COUNTER_END;
+    if(ascendance.radiance==RADIANCE_CHASE)return 0;
+    if(ascendance.radiance==RADIANCE_FOLLOW){
+        if(world.slot==PURSUIT_FIRST_SLOT)return !radiance_pursuit.rewarded&&frame>=PURSUIT_FIRST_BRANCH;
+        return world.slot==PURSUIT_SECOND_SLOT&&frame>=PURSUIT_SECOND_HIT_END+3.f;
+    }
+    if(world.move==W_SMALL&&dividing_slot(world.slot))
+        return frame>=(world.slot==DIVIDING_STEP_SLOT?70.f:42.f);
+#endif
+    if(world.source==904)return frame>=W_RELEASE_RECOVERY_CANCEL;
+    if(world.move==W_FOCUS&&world.wilds_focus_break&&(world.source==905||world.source==913))return 0;
+    const WildsClip *clip=wilds_clip(world.source);
+    if(clip)return clip->cancel&&frame>=clip->cancel;
+    if(world.move==W_SHEATHE)return w_iai_ready(&world,o);
+    if(world.move>=W_RISE&&world.move<=W_DOWN)return 0;
+    const WEvent *event=w_event(world.source,frame);
+    return event&&((event->input[WI_ROLL.word]>>WI_ROLL.shift)&3)==3;
+}
+
 static void world_art_capture(void *a,const MLObservation *o)
 {
-    unsigned sheath_recovery=(world.move==W_SHEATHE_END||world.source==917)&&pad_valid&&u16(a,STATE)==16&&
+    unsigned grounded_sheathed=pad_valid&&u16(a,STATE)==16&&
         !(word(a,AIR)&0x400)&&(int16_t)u16(a,HP)>0;
+    unsigned next=art_cancel.owner==a&&art_cancel.epoch==o->epoch&&art_cancel.next_motion&&
+        world.move&&art_cancel.next_motion==0x500+world.slot&&grounded_sheathed;
+    if(next&&!world_bound)return;
     if(!world.move||!world_bound||world_bound_actor!=(u32)(uptr)a||
-       (!o->eligible&&!sheath_recovery)||o->motion!=0x500+world.slot||o->native_action!=world_bound_action){
+       (!o->eligible&&!grounded_sheathed)||o->motion!=0x500+world.slot||o->native_action!=world_bound_action){
         art_cancel.owner=0;
         return;
+    }
+    if(next){
+        art_cancel.generation=o->bind_generation;
+        art_cancel.sample=o->sample_sequence;
+        art_cancel.next_motion=0;
     }
     if(o->simulation_delta<=0)return;
 
@@ -2681,9 +2821,18 @@ static void world_art_capture(void *a,const MLObservation *o)
 
 static unsigned world_art_commit(void *a,const WObservation *o,WDecision d)
 {
-    if(d.kind!=W_IDLE||art_cancel.owner!=a||art_cancel.epoch!=o->base.epoch||
+    /* A charging stance can wait for a separate release input. */
+    unsigned waiting=world.source==908||world.source==909||world.source==915;
+    unsigned expired=waiting&&o->base.sample_sequence-art_cancel.sample>ART_CANCEL_SAMPLES;
+    if(art_cancel.owner!=a||art_cancel.epoch!=o->base.epoch||art_cancel.next_motion||
        art_cancel.generation!=o->base.bind_generation||
-       o->base.sample_sequence-art_cancel.sample>28u||!o->alive||!o->grounded)return 0;
+       expired||!o->alive||!o->grounded)return 0;
+    if(d.kind==W_MOTION){
+        art_cancel.next_motion=0x500+d.slot;
+        return 0;
+    }
+    unsigned early=d.kind==W_KEEP&&world_art_move_cancel(o);
+    if(d.kind!=W_IDLE&&!early)return 0;
 
     unsigned slot=art_cancel.slot,old_slot=word(a,ART_SELECTED);
     art_cancel.owner=0;
@@ -2699,13 +2848,22 @@ static unsigned world_art_commit(void *a,const WObservation *o,WDecision d)
 
     /* Let the native action request debit the gauge and start effects. */
     ((void (*)(void *))(main_base+0x2acbec))(a);
+    unsigned moving_one=early&&world.move==W_SLIDE&&
+        !(world.source>=W_SPIRIT_TWO_FORWARD&&world.source<=W_SPIRIT_TWO_BACK);
+    if(early)d.rank_delta+=w_leave(&world).rank_delta;
+#if ML_ASCENDANCE_PROTOTYPE
+    WDecision exit={.kind=W_IDLE};
+    ascendance_transition(a,&exit);
+    ascendance.dividing_input=DIV_INPUT_NONE;
+#endif
     d.kind=W_KEEP;
     world_commit(a,d);
     world_physics_end(a);
     world_cleanup(a);
     world.controls=(WControls){0};
     world.wilds_charge_link=world.wilds_three_exit_sample=world.wilds_three_exit_r=0;
-    if(!w_moving_spirit_recovery(&world,o->base.sample_sequence))art_slide_from.owner=0;
+    if(moving_one)world_art_slide_seed(a);
+    else if(!w_moving_spirit_recovery(&world,o->base.sample_sequence))art_slide_from.owner=0;
     world.wilds_slide_exit_sample=world.wilds_slide_exit_r=0;
     art_entry_blend=(__typeof__(art_entry_blend)){a,byte(a,AREA),sample_sequence,group,action};
     ++submitting;
@@ -3088,19 +3246,36 @@ static unsigned world_update(void *a,const MLObservation *b)
         if(art_return==ML_R){
             unsigned moving_two=art_slide_from.owner==a&&art_slide_from.epoch==byte(a,AREA)&&
                 art_slide_from.seen&&sample_sequence-art_slide_from.sample<=ART_SLIDE_SAMPLES;
-            d=w_art_spirit(&world,&next,moving_two);
+            unsigned charge=o.base.held==ML_R&&art_return_input.r_ticks>=W_SPIRIT_FULL_HOLD_SECONDS*60.f;
+            /* Sakura and the evasion arts may finish with the blade stowed. */
+            unsigned draw=!next.drawn&&(charge||next.base.magnitude>=50);
+            if(draw)next.drawn=1;
+            d=w_art_spirit(&world,&next,moving_two,charge);
+            if(draw){
+                if(d.kind==W_ENTER)((void (*)(void *,unsigned))(main_base+0x2a2560))(a,1);
+                else d=(WDecision){0};
+            }
             if(d.kind==W_NATIVE){
                 art_exit.owner=0;
                 log_event("hunter_art_to_spirit",(u32)(uptr)a,d.native_action,art_return_input.r_length,0);
             }
-        }else d=w_art_follow(&world,&next,art_return);
+        }else{
+            unsigned draw=!next.drawn&&world_art_draw_handoff(art_return);
+            if(draw)next.drawn=1;
+            d=w_art_follow(&world,&next,art_return);
+            if(draw&&d.kind==W_ENTER)
+                ((void (*)(void *,unsigned))(main_base+0x2a2560))(a,1);
+        }
         if(d.kind!=W_KEEP)art_slide_from.owner=0;
         if(d.kind==W_ENTER){
             art_joined=1;
             art_exit.owner=0;
             d.motion_contract=1;d.blend=8;d.speed=1;
+            if(d.move==W_SHEATHE)
+                art_iai=(__typeof__(art_iai)){a,b->epoch,art_return_input.iai_key,b->held};
         }
     }
+    if(d.kind==W_KEEP)d=world_art_iai(a,&o);
 #endif
 #if ML_ASCENDANCE_PROTOTYPE
     unsigned dividing_bound=world.move==W_SMALL&&dividing_slot(world.slot)&&world_bound&&
@@ -3284,8 +3459,8 @@ static unsigned world_update(void *a,const MLObservation *b)
 #endif
     world_commit(a,d);w_input_finish(&world,&o,d);
 #if ML_WILDS_MOVES
-    if(art_joined&&!world_bound&&u16(a,STATE)==16&&u16(a,ACTION)==w_action(world.move)){
-        world_bind_motion(a);
+    if(art_joined&&u16(a,STATE)==16&&u16(a,ACTION)==w_action(world.move)){
+        if(!world_bound)world_bind_motion(a);
         log_event("hunter_art_to_move",(u32)(uptr)a,art_return,d.slot,(u32)d.blend);
     }
 #endif
@@ -3373,11 +3548,16 @@ static unsigned world_update(void *a,const MLObservation *b)
                 float frame=real(a,FRAME);
                 float hit_start=world.slot==DIVIDING_STEP_SLOT?54:26;
                 unsigned active=frame>=hit_start&&frame<hit_start+8;
-                if(active)wilds_equipment_shape(a);
+                if(active)wilds_equipment_shape_for(a,W_BLADE_DIVIDING);
                 unsigned opening=active&&world_hit!=DIVIDING_NORMAL_HIT;
                 world_hit_tick(a,&(WEvent){.hit=active?DIVIDING_NORMAL_HIT:-1});
                 if(active&&world_attack_owned)put(a,0x30a8,WILDS_SHAPE);
-                if(opening)log_event("ascendance_dividing_edge",(u32)(uptr)a,(u32)frame,world_attack_id,0);
+                if(opening&&world_attack_owned){
+#if ML_WORLD_AUDIO_PROBE || ML_WORLD_PRESENTATION
+                    lingyue_attack_sound(a,world.slot==DIVIDING_STEP_SLOT?WILDS_SOUND_HELM_CUT:WILDS_SOUND_IAI_WHOOSH);
+#endif
+                    log_event("ascendance_dividing_edge",(u32)(uptr)a,(u32)frame,world_attack_id,0);
+                }
             }else if(ascendance_independent_flash())ascendance_flash_blade(a);
             else if(musou.phase==MUSOU_ENTRY||musou.phase==MUSOU_SEAT)world_hit_tick(a,&(WEvent){.hit=-1});
             else if(stroke)ascendance_musou_blade(a,stroke);
@@ -3389,7 +3569,9 @@ static unsigned world_update(void *a,const MLObservation *b)
                 /* Fit the two existing GU hit intervals to the source return clip. */
                 if(musou.phase==MUSOU_CUT&&world.slot==40){
                     const WEvent *ret=w_event(world.source,real(a,FRAME)*(39.f/32));
-                    if(ret)world_hit_tick(a,ret);
+                    if(ret)lingyue_musou_finish_hit(a,ret);
+                }else if(musou.phase==MUSOU_DASH||musou.phase==MUSOU_CUT){
+                    lingyue_musou_finish_hit(a,e);
                 }else
 #endif
                 world_hit_tick(a,e);

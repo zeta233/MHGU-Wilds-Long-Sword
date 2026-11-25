@@ -347,6 +347,7 @@ WDecision w_leave(WState *s)
 {
     WDecision d={0};
     s->foresight_press.motion=0;
+    s->round_follow.motion=0;
     if(s->move==W_GROUND&&s->ground_node==5&&s->hit_success&&!s->rank_paid){
         spirit_round_reward(&d,s->rank);
     }
@@ -680,7 +681,7 @@ static WDecision ground_enter(WState *s,const WObservation *o,unsigned node,unsi
 #if ML_WORLD_INPUT_VM
 #include "world_command_driver.inc"
 #if ML_WILDS_MOVES
-WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two)
+WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsigned charge)
 {
     if(s->move||!o->alive||!o->drawn||!o->grounded||!o->resources_ready||o->valor)
         return (WDecision){0};
@@ -693,6 +694,7 @@ WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two)
         if(d.kind!=W_KEEP)return d;
         return wilds_directional_weak_spirit(s,o);
     }
+    if(charge&&spirit_available(o,15))return wilds_charge(s,o,1);
     return wilds_native(s,o,spirit_available(o,15)?16:17);
 }
 #endif

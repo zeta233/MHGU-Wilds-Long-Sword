@@ -2,6 +2,8 @@
 
 本补丁让光辉闪斩和追击二刀在 Vulkan 显示阶段使用径向模糊与局部折射。补丁基于 [MHGU Recomp 0.17.9](https://github.com/morerokk/MHGURecomp/tree/0.17.9)，上游提交为 `1b405eef2635db871fd021b9d3a7d6d06a25876a`。
 
+v0.260 加强闪斩的径向采样与命中折射，并在追击二刀开判时追加局部柔光。使用同一发布页的 v0.260 太刀模组包可同时获得前景刀光与扇面更新。
+
 已经安装 Windows 版 MHGU Recomp 0.17.9 的玩家可在退出游戏后备份原 `mhgurecomp.exe`，再换成发布页单独提供的同名程序。继续使用原来的 DLL、存档和游戏数据。恢复原程序即可回退。环境变量 `MHGU_RADIANCE_PRESENT=0` 可关闭屏幕取样效果。
 
 ## 从源码构建

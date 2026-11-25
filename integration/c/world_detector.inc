@@ -48,6 +48,10 @@ static void world_detector_begin(void *a)
 }
 static void world_detector_tick(void *a,float dt)
 {
+#if ML_ASCENDANCE_PROTOTYPE
+    /* Flash uses its animation clock for both collision and body protection. */
+    if(ascendance_independent_flash())return;
+#endif
     for(unsigned i=0;i<3;++i)world_detectors[i].remaining-=dt;
 #if ML_WILDS_MOVES
     if(world.source==918)return;

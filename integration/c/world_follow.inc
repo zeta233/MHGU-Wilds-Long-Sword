@@ -149,6 +149,18 @@ static void world_impact_sound(void *manager,void *target,void *attack,const flo
         world_original_impact_sound(manager,target,attack,point);
         return;
     }
+#if ML_ASCENDANCE_PROTOTYPE
+    if(blade){
+        if(ascendance_independent_flash()||world.source==W_CRIMSON_SPIN||
+           (radiance_pursuit.independent&&world.slot==PURSUIT_SECOND_SLOT)||
+           musou.phase==MUSOU_DASH||musou.phase==MUSOU_CUT)
+            impact=W_SOUND_LINGYUE_FINISH;
+        else if(musou.phase==MUSOU_FLURRY)impact=W_SOUND_LINGYUE_RAPID;
+        else if(ascendance.double_cut||dividing_slot(world.slot)||
+                (radiance_pursuit.independent&&world.slot==PURSUIT_FIRST_SLOT))
+            impact=W_SOUND_LINGYUE_CUT;
+    }
+#endif
     unsigned wilds_only=shell||follow==1||(blade&&(world.move==W_THRUST||world.move==W_RELEASE));
     if(wilds_only&&world_audio_impact(u16(attack,0x34),impact,delayed?delayed->ordinal:0,point)){
         log_event("wilds_impact_sound",world.actor,shell?1040:follow?1041+follow:world.source,
