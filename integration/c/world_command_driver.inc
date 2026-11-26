@@ -226,13 +226,21 @@ static WDecision wilds_iai_follow(WState *s,const WObservation *o)
         }
         return (WDecision){0};
     }
-    if(b->held&~(ML_R|ML_B|ML_X))s->iai_follow_keys=0;
-    if((b->held&(ML_R|ML_B))==(ML_R|ML_B)&&(edge&(ML_R|ML_B)))
-        s->iai_follow_keys=ML_R|ML_B;
-    else if(edge&(ML_R|ML_B)){
-        if(s->iai_follow_wait<=0)s->iai_follow_keys=0;
-        s->iai_follow_keys|=edge&(ML_R|ML_B);
-        s->iai_follow_wait=.10f;
+    const unsigned thrust=ML_R|ML_X,sheathe=ML_R|ML_B;
+    unsigned keys=b->held;
+    /* A complete chord supersedes the pending solo R, even when its R
+     * came from the Iai opener. Keep a pre-window tap through release. */
+    if(keys&~(thrust|ML_B))s->iai_follow_keys=0;
+    else if((keys==thrust||keys==sheathe)&&(edge&keys))s->iai_follow_keys=keys;
+    else if(s->iai_follow_keys!=thrust&&s->iai_follow_keys!=sheathe){
+        if(keys==ML_X&&(edge&ML_X)){
+            s->iai_follow_keys=ML_X;
+            s->iai_follow_wait=.05f;
+        }else if(edge&(ML_R|ML_B)){
+            if(s->iai_follow_wait<=0||s->iai_follow_keys==ML_X)s->iai_follow_keys=0;
+            s->iai_follow_keys|=edge&(ML_R|ML_B);
+            s->iai_follow_wait=.10f;
+        }
     }
     if(frame<37)return (WDecision){0};
     WObservation next=*o;
@@ -240,12 +248,15 @@ static WDecision wilds_iai_follow(WState *s,const WObservation *o)
     if(!o->valor_style&&s->rank_paid&&o->rank==s->rank&&o->rank<3){
         next.rank=o->rank+1;if(next.rank==3)next.base.gauge=100;
     }
+    if(s->iai_follow_keys==thrust)return enter(s,&next,W_THRUST,thrust);
+    if(s->iai_follow_keys==sheathe)return enter(s,&next,W_SHEATHE,sheathe);
     if(frame>=70&&b->held==ML_R){
         s->wilds_charge_link=3;
         if(s->wilds_bridge_hold>=.60f)return wilds_charge(s,&next,3);
     }
-    if(s->iai_follow_keys==(ML_R|ML_B))return enter(s,&next,W_SHEATHE,ML_R|ML_B);
-    if(held==ML_X&&next.rank==3)return w_wilds_enter(s,&next,W_CHIJIN);
+    if(next.rank==3&&!(keys&~ML_X)&&
+       (s->iai_follow_keys==ML_X?s->iai_follow_wait<=0:held==ML_X))
+        return w_wilds_enter(s,&next,W_CHIJIN);
     if(s->iai_follow_keys==ML_R&&s->iai_follow_wait<=0){
         if(held==ML_R){
             if(frame>=70&&s->iai_follow_wait<=-.50f)return wilds_charge(s,&next,3);

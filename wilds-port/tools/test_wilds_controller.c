@@ -261,6 +261,36 @@ static void iai_held_entry(void)
  }
  assert(0 && "sustained Iai input failed to charge");
 }
+static void iai_thrust_priority(void)
+{
+ const unsigned thrust=ML_R|ML_X;
+ const struct {
+  unsigned opener,first,second;
+  float frame;
+  unsigned finish;
+ } cases[]={
+  {0,thrust,0,40,0},
+  {0,ML_R,thrust,40,0},
+  {0,ML_X,thrust,40,0},
+  {ML_R,thrust,0,40,0},
+  {0,thrust,0,36,0},
+  {0,ML_R,thrust,40,1},
+ };
+ for(unsigned i=0;i<sizeof(cases)/sizeof(*cases);i++){
+  WState s={.actor=1,.epoch=1};WObservation o=obs();o.base.held=cases[i].opener;
+  w_debug_enter(&s,&o,W_BIG);s.consumed=cases[i].opener;s.counter_success=1;
+  o.base.native_action=w_action(W_BIG);o.base.motion=0x500+s.slot;
+  o.base.held=cases[i].first;o.base.animation_frame=cases[i].frame;o.base.sample_sequence++;
+  WDecision d=w_step(&s,&o);
+  if(cases[i].second||cases[i].frame<37){
+   assert(d.kind==W_KEEP);
+   o.base.held=cases[i].second;o.base.animation_frame+=2;o.base.sample_sequence++;
+   o.base.simulation_delta=2;o.base.motion_finished=cases[i].finish;
+   d=w_step(&s,&o);
+  }
+  assert(d.kind==W_ENTER&&d.move==W_THRUST);
+ }
+}
 static void short_spirit_costs(void)
 {
  const unsigned sources[]={104,106,108},frames[]={56,54,110},costs[]={15,20,25};
@@ -285,6 +315,7 @@ int main(void){
  charge_routes();
  short_spirit_costs();
  iai_held_entry();
+ iai_thrust_priority();
  WObservation o=obs();WState s={0};WDecision d;
  assert(w_wilds_enter(&s,&o,W_RELEASE).kind==W_KEEP);
  s.move=W_LAND;s.wilds_helm_red=0;assert(w_wilds_enter(&s,&o,W_RELEASE).kind==W_KEEP);
@@ -433,6 +464,10 @@ int main(void){
    assert(d.kind==W_KEEP);
    o.base.sample_sequence++;o.base.simulation_delta=7;o.base.held=0;
    d=world_command_step(&s,&o,s.source,w_event(s.source,47));
+  }else if(button==1){
+   assert(d.kind==W_KEEP);
+   o.base.sample_sequence++;o.base.simulation_delta=3;o.base.held=0;o.base.animation_frame=43;
+   d=world_command_step(&s,&o,s.source,w_event(s.source,43));
   }
   assert(button==0?d.move==W_SHEATHE:button==1?d.source==W_CRIMSON_STATIONARY:d.kind==W_NATIVE&&d.native_action==26);
  }
@@ -491,9 +526,12 @@ int main(void){
  o.contact=o.counter=1;assert(!w_step(&s,&o).gauge_fill);
  o.rank=2;w_reset(&s);d=w_debug_enter(&s,&o,W_FORESIGHT);assert(d.source==140&&d.gauge_clear);
  o=obs();o.rank=2;o.base.gauge=0;w_reset(&s);w_debug_enter(&s,&o,W_BIG);
- s.actor=1;s.epoch=1;o.counter=1;o.base.held=ML_X;o.base.animation_frame=37;
+ s.actor=1;s.epoch=1;o.counter=1;o.base.held=ML_X;o.base.animation_frame=37;o.base.sample_sequence++;
  o.base.motion=0x500+s.slot;o.base.native_action=w_action(s.move);
- d=w_step(&s,&o);assert(d.source==W_CRIMSON_STATIONARY&&d.rank_delta==1&&d.gauge_fill&&s.rank==3);
+ d=w_step(&s,&o);assert(d.kind==W_KEEP&&d.rank_delta==1&&d.gauge_fill);
+ o.counter=0;o.rank=3;o.base.gauge=100;o.base.held=0;o.base.animation_frame=40;
+ o.base.sample_sequence++;o.base.simulation_delta=3;
+ d=w_step(&s,&o);assert(d.source==W_CRIMSON_STATIONARY&&!d.rank_delta&&s.rank==3);
  o=obs();o.rank=1;o.base.gauge=0;w_reset(&s);w_debug_enter(&s,&o,W_BIG);
  s.counter_success=1;o.base.held=ML_R;o.base.animation_frame=40;
  o.base.sample_sequence++;

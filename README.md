@@ -10,6 +10,10 @@
 
 Android Recomp 可通过 Files 页导入安卓完整包。v0.271 已在荣耀 Magic8 Pro 上用 MHGU Relink 0.2.1（Forge 2.0.0）和 2808×1256 分辨率完成真机复测。 [安卓 v0.271 发布包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.271) · [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
 
+## v0.273 更新
+
+- 大居合反击成功后，R＋X 优先派生气刃突刺。支持组合键轻微错开，以及派生窗口开启前的短按。使用可选 R／ZR 互换补丁时按 ZR＋X。
+
 ## v0.272 更新
 
 - Windows Recomp、安卓 Recomp、Eden 和 Switch Atmosphère 同步更新勇气派生和护腕逻辑。刚一 GP 后可接刚二或不收刀的练气解放斩。登龙有效命中回复勇气槽。

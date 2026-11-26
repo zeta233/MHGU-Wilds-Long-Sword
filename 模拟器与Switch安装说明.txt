@@ -1,4 +1,4 @@
-荒野太刀 · 凌越扩展 v0.272 兼容测试版
+荒野太刀 · 凌越扩展 v0.273 兼容测试版
 
 适用游戏是《Monster Hunter Generations Ultimate》1.4.0，Title ID 0100770008DD8000。请先准备已能在该环境加载插件的 MHGU Forge 1.5.1，并留一套有效的 Forge 前置。
 
