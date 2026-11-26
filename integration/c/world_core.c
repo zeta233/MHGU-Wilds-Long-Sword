@@ -179,14 +179,15 @@ unsigned w_valor_chord(unsigned state,unsigned action,unsigned motion,float fram
     if(state!=16)return 0;
     /* Keep the immediate native GP on a lone R. Accept the partner button
      * during the first few frames of the native opener in either key order. */
+    if(frame<=8&&action==130&&motion==0x5c0&&(move==W_THRUST||move==W_FOCUS))return move;
     if(move==W_THRUST&&frame<=8&&
-       ((action==130&&motion==0x5c0)||((action==16||action==17)&&motion==0x568)||
+       (((action==16||action==17)&&motion==0x568)||
         (action<=3&&(motion==0x565||motion==0x566))))return move;
     unsigned draw_cancel=w_valor_draw_cancel(action,motion);
     if(draw_cancel)return frame>=draw_cancel?move:0;
     static const unsigned char recovery[][3]={
         {104,106,38},{23,106,44},{24,106,44},{105,108,95},{119,107,38},
-        {102,130,46},{103,131,46},{108,131,46},{109,131,46},{22,105,38},
+        {102,130,46},{103,131,46},{22,105,38},
         {118,105,38},{143,103,76},{144,103,76},{130,192,44},{130,104,62},
         {116,191,34},{116,185,22},{117,186,110},{134,190,32},{134,184,22},
         {135,194,50},{135,185,22},{136,191,34},{136,185,22},{137,194,50},{137,185,22},
@@ -357,7 +358,7 @@ WDecision w_leave(WState *s)
     if(s->move==W_BIG&&!s->rank_paid&&!s->counter_success&&s->rank)d.rank_delta=-1;
 #endif
     if(s->helm_cost_pending&&s->rank)d.rank_delta-=1;
-    s->helm_cost_pending=0;s->red_foresight_chain=0;s->wilds_charge_link=0;
+    s->helm_cost_pending=0;s->valor_release=0;s->red_foresight_chain=0;s->wilds_charge_link=0;
     s->wilds_three_exit_r=s->wilds_three_exit_sample=0;
     s->wilds_slide_exit_sample=s->wilds_slide_exit_r=s->wilds_slide_weak_r=0;
     s->spirit_crimson_pending=s->spirit_crimson_repeat=0;
@@ -405,7 +406,7 @@ static void big_counter_rank_reward(const WObservation *o,WDecision *d)
 
 static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned mask)
 {
-    if(o->valor&&(move==W_SHEATHE||move==W_SMALL||move==W_BIG))return (WDecision){0};
+    if((o->valor_style||o->valor)&&(move==W_SHEATHE||move==W_SMALL||move==W_BIG))return (WDecision){0};
     /* Source down::exit bypasses settlement only for land (action0x5c).
      * Land starts weapon23a8=0.5; leaving that sequence settles immediately. */
     unsigned transfer=move==W_LAND&&((s->move==W_DOWN&&s->helm_cost_pending)||(s->move==W_AIR&&o->rank));
@@ -463,12 +464,12 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
         d.blend=8;
         d.speed=1;
     }
-    /* Blend from the native Valor opener only after its guard window ends.
-     * Start the slide clock at frame zero so movement and strikes stay in sync. */
+    /* Carry the native guard pose into the first step without masking the
+     * weight shift. Keep the slide clock aligned with its root and hit events. */
     if(move==W_SLIDE && o->valor && o->state==16 && o->base.native_action==130 &&
        o->base.motion==0x5c0){
         d.motion_contract=1;
-        d.blend=8.0f;
+        d.blend=5.0f;
         d.speed=1.0f;
     }
 #endif
@@ -588,6 +589,19 @@ WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move)
 }
 
 #if ML_WILDS_MOVES
+WDecision w_valor_guard_release(WState *s,const WObservation *o,unsigned second)
+{
+    if(s->move||!o->valor||!o->alive||!o->grounded||!o->drawn||!o->resources_ready)return (WDecision){0};
+    const MLObservation *b=&o->base;
+    if(second){
+        if(o->state!=16||b->native_action!=116||b->motion!=0x5b9||b->animation_frame<38)return (WDecision){0};
+    }else if(!w_valor_guard_reaction(o->state,b->native_action,b->motion)||b->animation_frame<46)
+        return (WDecision){0};
+    WDecision d=enter(s,o,W_RELEASE,ML_R|ML_B);
+    s->valor_release=1;
+    d.motion_contract=1;d.blend=8;d.speed=1;
+    return d;
+}
 WDecision w_art_follow(WState *s,const WObservation *o,unsigned keys)
 {
     if(s->move||!o->alive||!o->grounded||!o->resources_ready)return (WDecision){0};
@@ -595,7 +609,7 @@ WDecision w_art_follow(WState *s,const WObservation *o,unsigned keys)
     if(!o->drawn)return (WDecision){0};
     if(keys==(ML_R|ML_Y))return w_wilds_enter(s,o,W_FOCUS);
     unsigned move=chord(keys);
-    if(!move||(move==W_SHEATHE&&o->valor))return (WDecision){0};
+    if(!move)return (WDecision){0};
     return enter(s,o,move,keys);
 }
 #endif
@@ -640,7 +654,7 @@ static WDecision ground_enter(WState *s,const WObservation *o,unsigned node,unsi
         node==64?W_SMALL:node==65?W_BIG:0;
     if(special){
         WDecision d=enter(s,o,special,mask);
-        if(prep){
+        if(d.kind==W_ENTER&&prep){
             s->main_source=s->source;
             WDecision phase=ground_motion(s,prep,previous,o->base.animation_frame,W_ENTER);
             return combine(d,phase);
@@ -683,8 +697,12 @@ static WDecision ground_enter(WState *s,const WObservation *o,unsigned node,unsi
 #if ML_WILDS_MOVES
 WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsigned charge)
 {
-    if(s->move||!o->alive||!o->drawn||!o->grounded||!o->resources_ready||o->valor)
+    if(s->move||!o->alive||!o->drawn||!o->grounded||!o->resources_ready)
         return (WDecision){0};
+    if(o->valor){
+        wilds_spirit_direction(s,&o->base);
+        return wilds_valor_spirit_one(s,o);
+    }
     if(o->base.magnitude>=50){
         if(moving_two&&spirit_available(o,15)){
             wilds_spirit_direction(s,&o->base);

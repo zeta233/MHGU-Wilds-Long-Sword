@@ -67,15 +67,18 @@ unsigned w_wilds_fade_action(const WObservation *o)
     }
     return o->valor?143:8;
 }
+static WDecision wilds_valor_spirit_one(WState *s,const WObservation *o)
+{
+    unsigned moving=s->wilds_r_direction,heading=s->wilds_direction_heading,input=s->wilds_direction_input;
+    WDecision d=wilds_native(s,o,130);
+    d.valor_slide=moving;d.valor_slide_heading=heading;d.valor_slide_input=input;
+    return d;
+}
+
 static WDecision wilds_spirit(WState *s,const WObservation *o,unsigned crimson_source)
 {
     unsigned crimson=crimson_source!=0;
-    if(o->valor&&crimson){
-        unsigned moving=s->wilds_r_direction,heading=s->wilds_direction_heading,input=s->wilds_direction_input;
-        WDecision d=wilds_native(s,o,130);
-        d.valor_slide=moving;d.valor_slide_heading=heading;d.valor_slide_input=input;
-        return d;
-    }
+    if(o->valor&&(crimson||s->move==W_FOCUS))return wilds_valor_spirit_one(s,o);
     if((crimson||s->source==902)&&s->wilds_r_direction){
         WObservation next=*o;
         next.base.heading=s->wilds_direction_heading;next.base.input_heading=s->wilds_direction_input;
@@ -146,17 +149,17 @@ static WDecision wilds_charge(WState *s,const WObservation *o,unsigned stage)
         (!s->move&&s->wilds_charge_carry_action&&o->state==16&&
          o->base.native_action==s->wilds_charge_carry_action)||
         (!s->move&&s->wilds_charge_carry_source==902&&
-         w_charged_three_recovery(s,o->base.sample_sequence));
+         (w_charged_three_recovery(s,o->base.sample_sequence)||
+          (s->wilds_charge_link&&o->base.held==ML_R)));
     float carry=inherit?s->wilds_charge_carry:0;
     WDecision d=w_wilds_enter(s,o,W_CHARGE);
     if(d.kind!=W_ENTER)return d;
     s->wilds_stage=stage;
     s->wilds_elapsed=carry;
-    if(carry>0){
-        d.motion_contract=1;d.blend=6;
-        d.start=s->entry_start=carry*(W_CHARGE_READY_FRAME/W_CHARGE_READY_SECONDS);
-        d.speed=(W_CHARGE_READY_FRAME/(60.f*W_CHARGE_READY_SECONDS))*w_charge_rate(s);
-    }
+    d.motion_contract=1;
+    d.blend=6;
+    d.start=s->entry_start=carry*(W_CHARGE_READY_FRAME/W_CHARGE_READY_SECONDS);
+    d.speed=(W_CHARGE_READY_FRAME/(60.f*W_CHARGE_READY_SECONDS))*w_charge_rate(s);
     return d;
 }
 WDecision w_wilds_round_charge(WState *s,const WObservation *o)
@@ -176,8 +179,9 @@ static WDecision wilds_charge_result(WState *s,WDecision d,float elapsed)
 static WDecision wilds_charge_recover(WState *s,const WObservation *o)
 {
     unsigned link=s->wilds_charge_link;
-    unsigned three=s->source==902&&o->rank==3&&!o->valor&&o->grounded;
-    float carry=three&&s->wilds_charge_carry_source==902?s->wilds_charge_carry:0;
+    unsigned charged_three=s->source==902&&!o->valor&&o->grounded;
+    unsigned three=charged_three&&o->rank==3;
+    float carry=charged_three&&(three||link)&&s->wilds_charge_carry_source==902?s->wilds_charge_carry:0;
     unsigned slide=s->move==W_SLIDE&&w_moving_spirit_one(s->source)&&!o->valor&&o->grounded;
     unsigned slide_r=slide&&s->wilds_r_pending&&s->wilds_r_direction&&!(o->base.held&~ML_R);
     unsigned queued=link&&s->wilds_r_pending&&!o->valor&&o->base.held==ML_R&&
@@ -214,7 +218,7 @@ static WDecision wilds_bridge(WState *s,const WObservation *o,unsigned source)
     unsigned native_carry=s->wilds_charge_carry_action&&o->state==16&&
         b->native_action==s->wilds_charge_carry_action;
     unsigned recovery_carry=source==1&&s->wilds_charge_carry_source==902&&
-        w_charged_three_recovery(s,b->sample_sequence);
+        (w_charged_three_recovery(s,b->sample_sequence)||(s->wilds_charge_link&&b->held==ML_R));
     if(!s->move&&!native_carry&&!recovery_carry){
         s->wilds_charge_carry=0;
         s->wilds_charge_carry_source=s->wilds_charge_carry_action=0;
@@ -432,23 +436,26 @@ static unsigned wilds_charge_window(const WState *s,const WObservation *o)
     case W_CRIMSON_RETREAT:return o->valor?0:90;
     case 906:return o->valor?0:49;
     case 907:return o->valor?0:69;
-    case 903:case 910:case 911:return 56;
-    case 912:return 60;
+    case 903:case 910:case 911:return o->valor?0:56;
+    case 912:return o->valor?0:60;
     case W_SPIRIT_TWO_FORWARD:return 62;
     case W_SPIRIT_TWO_LEFT:case W_SPIRIT_TWO_RIGHT:return 72;
     case W_SPIRIT_TWO_BACK:return 80;
     case W_CRIMSON_SPIN:return 69;
     case 902:return W_CHARGED_THREE_BRANCH_FRAME;
-    case 914:case W_FOCUS_BACK:return 50;
-    case W_FOCUS_LEFT:case W_FOCUS_RIGHT:return 60;
+    case 914:case W_FOCUS_BACK:return o->valor?0:50;
+    case W_FOCUS_LEFT:case W_FOCUS_RIGHT:return o->valor?0:60;
     default:return 0;
     }
 }
 
 static WDecision wilds_step(WState *s,const WObservation *o)
 {
+    enum { VALOR_RETURN_GP=4, VALOR_RETURN_COUNTER=8 };
     const MLObservation *b=&o->base;const WildsClip *clip=wilds_clip(s->source);
     if(!clip)return wilds_finish(s,W_ABORT,b->heading);
+    if(!o->valor&&(s->wilds_r_pending&(VALOR_RETURN_GP|VALOR_RETURN_COUNTER)))
+        s->wilds_r_pending=0;
     float frame=b->animation_frame,dt=0;unsigned pressed=0;
     if(s->wilds_sample!=b->sample_sequence){
         s->wilds_sample=b->sample_sequence;
@@ -463,6 +470,7 @@ static WDecision wilds_step(WState *s,const WObservation *o)
     unsigned charged_three=s->source==902;
     unsigned fast_full=(charged_three||(s->move==W_CHIJIN&&s->source==907))&&o->rank==3&&!o->valor;
     unsigned repeat=s->spirit_crimson_repeat;
+    unsigned valor_moving_one=o->valor&&s->move==W_SLIDE&&w_moving_spirit_one(s->source);
     /* An R carried into the moving cut is spent. Only a new, centered
      * R can charge; a directional R belongs to the next moving cut. */
     unsigned slide_charge=s->move!=W_SLIDE||
@@ -551,6 +559,8 @@ static WDecision wilds_step(WState *s,const WObservation *o)
     /* MOT 287 plants the feet and finishes its backward cut at frame 40.
      * Let solo R take over there. */
     unsigned crimson=s->move==W_CHIJIN;
+    unsigned valor_return=o->valor&&(s->source==907||
+        (s->move==W_FOCUS&&(!s->wilds_focus_break||(s->source!=905&&s->source!=913))));
     unsigned retreat_spirit=crimson&&s->source==W_CRIMSON_RETREAT;
     unsigned crimson_cancel=retreat_spirit?40u:clip->cancel;
     if(crimson){
@@ -566,15 +576,34 @@ static WDecision wilds_step(WState *s,const WObservation *o)
         if(o->grounded&&frame>=crimson_cancel&&(thrust_chord||s->wilds_thrust_buffer>0))
             return enter(s,o,W_THRUST,ML_R|ML_X);
     }
+    if(valor_return){
+        unsigned keys=b->held;
+        if((pressed&(ML_R|ML_A))&&keys==(ML_R|ML_A)&&frame+18>=clip->cancel){
+            s->wilds_r_pending=VALOR_RETURN_COUNTER;
+        }else if((pressed&ML_R)&&keys==ML_R&&(crimson||frame+18>=clip->cancel)){
+            s->wilds_r_pending=VALOR_RETURN_GP;s->wilds_r_wait=.10f;
+            wilds_spirit_direction(s,b);
+        }else if(pressed&~ML_R){
+            s->wilds_r_pending=0;
+        }
+        if(o->grounded&&frame>=clip->cancel){
+            if(s->wilds_r_pending==VALOR_RETURN_COUNTER){
+                s->wilds_r_pending=0;
+                return enter(s,o,W_FORESIGHT,ML_R|ML_A);
+            }
+            if(s->wilds_r_pending==VALOR_RETURN_GP&&s->wilds_r_wait<=0)
+                return wilds_spirit_follow(s,o);
+        }
+    }
     /* A solo R during a Crimson swing is one queued follow-up. Keep the
      * stage's last attack window intact and take its normal cancel frame. */
     unsigned repeat_x=repeat&&s->wilds_buffer>0&&s->crimson_buffer_source==906;
     unsigned spirit_r=b->held==ML_R||(repeat_x&&b->held==(ML_R|ML_X));
-    /* The forward Spirit cuts take the next tap from their first active frame.
-     * The actual transition still waits for the clip's normal cancel. */
-    unsigned forward_strike_open=s->move==W_SLIDE&&
+    /* Take input during the strike; spend it at the clip's cancel frame. */
+    unsigned moving_strike_open=s->move==W_SLIDE&&
         ((s->source==903&&frame>=30)||(s->source==W_SPIRIT_TWO_FORWARD&&frame>=28));
-    if(spirit_link&&(pressed&ML_R)&&spirit_r&&(charged_three||crimson||forward_strike_open||frame+18>=clip->cancel)){
+    if(valor_moving_one&&s->source!=903) moving_strike_open=frame>=(s->source==912?25:26);
+    if(!valor_return&&spirit_link&&(pressed&ML_R)&&spirit_r&&(charged_three||crimson||moving_strike_open||frame+18>=clip->cancel)){
         s->wilds_r_pending=1;s->wilds_r_wait=.10f;
         if(fast_full)s->wilds_bridge_hold=0;
         wilds_spirit_direction(s,b);
@@ -588,9 +617,9 @@ static WDecision wilds_step(WState *s,const WObservation *o)
         }
     }
     if(b->held&(ML_Y|ML_ZR|ML_B))s->wilds_r_pending=0;
-    if(s->move==W_SLIDE&&s->wilds_r_pending&&s->wilds_r_wait>0&&b->held==ML_R&&
+    if(!valor_moving_one&&s->move==W_SLIDE&&s->wilds_r_pending&&s->wilds_r_wait>0&&b->held==ML_R&&
        !s->wilds_r_direction&&b->magnitude>=50)wilds_spirit_direction(s,b);
-    if(crimson&&frame<clip->cancel&&(b->held&(repeat?ML_A:ML_X|ML_A)))s->wilds_r_pending=0;
+    if(crimson&&!valor_return&&frame<clip->cancel&&(b->held&(repeat?ML_A:ML_X|ML_A)))s->wilds_r_pending=0;
     if(repeat){
         /* X rolled onto a pending Spirit I belongs to that next action. */
         if(b->held&~(ML_R|ML_X))s->spirit_crimson_pending=0;
@@ -729,6 +758,8 @@ static WDecision wilds_step(WState *s,const WObservation *o)
             return w_wilds_enter(s,&next,W_CHIJIN);
         }
     }
+    if(s->valor_release&&frame>=W_VALOR_RELEASE_END)
+        return wilds_charge_recover(s,o);
     if(frame>=clip->cancel){
         if((pressed&(ML_X|ML_A))&&(b->held&(ML_X|ML_A|ML_R|ML_ZR))==(ML_X|ML_A)){
             return wilds_native(s,o,w_wilds_fade_action(o));
@@ -740,8 +771,8 @@ static WDecision wilds_step(WState *s,const WObservation *o)
         if(!crimson&&(pressed&(ML_R|ML_X|ML_A))&&(b->held==(ML_R|ML_X)||b->held==(ML_R|ML_A))&&
            !(b->held==(ML_R|ML_X)&&repeat&&s->wilds_r_pending))
             return enter(s,o,b->held&ML_A?W_FORESIGHT:W_THRUST,b->held);
-        if(!holding_charge&&s->wilds_r_pending&&s->wilds_r_wait<=0&&
-           !(s->move==W_SLIDE&&b->held==ML_R&&!s->wilds_r_direction))
+        if(!valor_return&&!holding_charge&&s->wilds_r_pending&&s->wilds_r_wait<=0&&
+           !(s->move==W_SLIDE&&!valor_moving_one&&b->held==ML_R&&!s->wilds_r_direction))
             return wilds_spirit_follow(s,o);
         if((pressed&ML_X)&&s->move!=W_CHIJIN)return wilds_native(s,o,0);
         if(pressed&ML_A)return wilds_native(s,o,s->move==W_SLIDE?4:25);

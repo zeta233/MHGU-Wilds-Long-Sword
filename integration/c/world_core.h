@@ -22,7 +22,7 @@ static inline unsigned w_focus_finisher_end(unsigned source)
 enum { W_CRIMSON_DIRECTIONAL=1,W_CRIMSON_LATERAL };
 enum { W_KEEP,W_ENTER,W_NATIVE,W_IDLE,W_ROLL,W_ABORT,W_NATIVE_R,W_MOTION };
 enum { W_RED_ROUND=1,W_RED_IAI=2 };
-enum { W_VALOR_COUNTER_GAIN=200 };
+enum { W_VALOR_COUNTER_GAIN=200,W_VALOR_HELM_GAIN=300,W_VALOR_RELEASE_END=106 };
 enum { W_RELEASE_SEAT_START=118,W_RELEASE_SEAT_ALIGN=132,W_RELEASE_SHEATHE_FRAME=140,W_RELEASE_RECOVERY_CANCEL=205 };
 /* The roundslash archive removes 48 frames from the original GU timeline. */
 enum { W_ROUND_TAIL_FRAME=62,W_ROUND_CUT_FRAMES=48,W_ROUND_SHEATHE_FRAME=80,W_ROUND_FRAMES=111 };
@@ -59,14 +59,14 @@ typedef struct {
     float air_sheathe_buffer;
     unsigned bound,consumed,queued,queued_mask,queued_source,foresight_gauge;
     struct {
-        unsigned motion,action,generation;
+        unsigned motion,action,generation,valor;
     } foresight_press;
     struct {
         unsigned motion,generation,held,pending;
     } round_follow;
     unsigned queued_word,queued_shift,queued_heading;
     unsigned counter_success,hit_success,rank_paid,follow_ready;
-    unsigned helm_cost_pending;
+    unsigned helm_cost_pending,valor_release;
     unsigned ground_node,main_source,spirit_paid;
     unsigned wilds_tier,wilds_sample,wilds_previous;
     float wilds_elapsed,wilds_buffer,wilds_roll_buffer,wilds_thrust_buffer;
@@ -205,6 +205,7 @@ unsigned w_native_roll(unsigned state,unsigned action);
 void w_reset(WState *s);
 WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move);
 WDecision w_art_follow(WState *s,const WObservation *o,unsigned keys);
+WDecision w_valor_guard_release(WState *s,const WObservation *o,unsigned second);
 WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsigned charge);
 WDecision w_iai_press(WState *s,const WObservation *o);
 WDecision w_iai_attack(WState *s,const WObservation *o,unsigned key);

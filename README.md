@@ -1,14 +1,21 @@
 # 荒野太刀 · 凌越扩展 · MHGU Recomp
 
-将《怪物猎人 荒野》的太刀动作移植到 MHGU，支持公会与勇气风格。公会和勇气普通模式可使用特殊纳刀、居合和见切。勇气蓝刃可以使用刚气刃 GP、赤刃连段和消耗勇气槽的红刃见切。
+将《怪物猎人 荒野》的太刀动作移植到 MHGU，支持公会与勇气风格。公会可使用特殊纳刀、居合和见切。勇气使用原生纳刀，蓝刃可使用刚气刃 GP、赤刃连段和消耗勇气槽的红刃见切。
 
 ## 安装与按键
 
 保存并退出游戏，使用 Windows 版 MHGU Recomp 0.17.9 和 Switch Forge v1.5.1 前置。将完整安装包中的 Wilds-LS-World 文件夹解压到游戏的 mods 目录。更新前先将旧版移出 mods 备份。光辉闪斩与追击二刀的屏幕径向模糊和折射需要同一发布页提供的 Recomp 后处理补丁。
 
-[下载完整包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/latest) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
+[Windows、Eden 与 Switch 发布包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.262) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
 
-Android MHGU Recomp 0.20.0 可通过 Files 页导入安卓兼容测试包。 [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
+Android Recomp 可通过 Files 页导入安卓完整包。v0.271 已在荣耀 Magic8 Pro 上用 MHGU Relink 0.2.1（Forge 2.0.0）和 2808×1256 分辨率完成真机复测。 [安卓 v0.271 发布包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.271) · [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
+
+## v0.271 安卓更新
+
+- 修复部分安卓 Forge 构建绘制增幅护腕及前景特效时出现的大块图形遮挡。
+- 小型怪物受到太刀的有效伤害后，增幅护腕正常积攒充能。
+- 原地和移动蓄力气刃斩的姿势按照进度变化。连续蓄力从上一招实际达到的进度继续。
+- 包内含配套的安卓插件、动作档、安装与手柄按键说明。更新时请同时替换插件和动作档。
 
 ## v0.262 更新
 
@@ -105,7 +112,7 @@ Android MHGU Recomp 0.20.0 可通过 Files 页导入安卓兼容测试包。 [�
 .\scripts\build.ps1
 ```
 
-安卓 Recomp 插件使用 `.\scripts\build.ps1 -Platform Android` 构建。
+安卓 Recomp 插件使用 `.\scripts\build.ps1 -Platform Android` 构建。安卓动作档与握刀表由 `wilds-port/tools/build_android_charge_poses.py` 生成，请配合该插件使用。
 
 输出为 integration/mhw_ls_rebuild.nro，安装位置为 Wilds-LS-World/romfs/nativeNX/plugins/。integration/c 包含战斗与输入逻辑和编译所需的生成表，integration/src 包含 Rust 入口。
 

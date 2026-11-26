@@ -17,7 +17,7 @@ static const void *world_wound_part_table(void *);
 #endif
 static unsigned world_helm_tier;
 static unsigned world_helm_count,world_helm_hit_sample;
-static unsigned world_helm_emitted,world_helm_line_hit;
+static unsigned world_helm_emitted,world_helm_line_hit,world_helm_valor_paid;
 #if ML_WORLD_PRESENTATION
 static float world_helm_landed,world_helm_sound_point[3];
 static float world_helm_blade[16];
@@ -434,9 +434,66 @@ static u32 wilds_high_blade_query(void *manager,void *attack,void *target,float 
     return result;
 }
 #endif
+#if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE
+/* Small monsters apply collision damage during their next actor update.
+ * Keep the pre-contact HP for a few pad samples, keyed by the live enemy. */
+enum { SMALL_HIT_SLOTS=10, SMALL_HIT_SAMPLES=12 };
+static struct {
+    void *target;
+    const void *status;
+    unsigned id, hp, sample;
+} small_hits[SMALL_HIT_SLOTS];
+
+static void world_small_hits_tick(void *hunter)
+{
+    const void *registry=(const void *)(uptr)word((const void *)main_base,0x1851fe0);
+    for(unsigned i=0;i<SMALL_HIT_SLOTS;++i){
+        if(!small_hits[i].target)continue;
+        void *target=small_hits[i].target;
+        const void *status=small_hits[i].status;
+        if(!registry||word(registry,28+4*i)!=(u32)(uptr)target||
+           word(target,0x1428)!=(u32)(uptr)status||u16(status,0x1b6)!=small_hits[i].id||
+           byte(target,AREA)!=byte(hunter,AREA)||sample_sequence-small_hits[i].sample>SMALL_HIT_SAMPLES||
+           !ascendance_owner(hunter)){
+            small_hits[i].target=0;
+            continue;
+        }
+        unsigned hp=word(status,0x370);
+        if(hp<small_hits[i].hp){
+            unsigned damage=small_hits[i].hp-hp;
+            small_hits[i].target=0;
+            ascendance_hit(hunter,0,target,0,damage);
+        }
+    }
+}
+#endif
 static u32 world_monster_query(void *manager,void *attack,void *target)
 {
     unsigned own=world_attack_owned&&(uptr)attack==(uptr)world_attack_actor+0x3020&&u16(attack,0x34)==world_attack_id;
+#if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE
+    void *hunter=(void *)(uptr)world.actor;
+    const void *small_status=0;
+    unsigned small_hp=0, small_slot=SMALL_HIT_SLOTS, small_id=0;
+    unsigned local_blade=hunter&&attack==(void *)((uptr)hunter+0x3020)&&
+        word(attack,0xc)==world.actor&&byte(attack,0x10)==0;
+    if(hunter&&target&&ascendance_owner(hunter)&&byte(hunter,AREA)==byte(target,AREA)){
+        const void *status=(const void *)(uptr)word(target,0x1428);
+        unsigned id=status?u16(status,0x1b6):0;
+        if(id>=10000&&id<65535){
+            const void *registry=(const void *)(uptr)word((const void *)main_base,0x1851fe0);
+            for(unsigned i=0;registry&&i<SMALL_HIT_SLOTS;++i){
+                if(word(registry,28+4*i)!=(u32)(uptr)target)continue;
+                small_status=status;
+                small_hp=word(status,0x370);
+                small_slot=i;
+                small_id=id;
+                break;
+            }
+        }
+    }
+    if(small_slot<SMALL_HIT_SLOTS&&small_hits[small_slot].target)
+        world_small_hits_tick(hunter);
+#endif
 #if ML_WILDS_MOVES
     const WShellPosition *release=own?0:world_release_shell(attack);
     if(release&&release->target!=(u32)(uptr)target)return 0;
@@ -488,11 +545,38 @@ static u32 world_monster_query(void *manager,void *attack,void *target)
         }
     }
 #endif
+#if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE
+    if(small_status&&word(target,0x1428)==(u32)(uptr)small_status&&
+       byte(attack,0xb4)==1&&word(attack,0xb0)==(u32)(uptr)target){
+        if(local_blade&&(int)small_hp>0)
+            small_hits[small_slot]=(__typeof__(small_hits[0])){target,small_status,small_id,small_hp,sample_sequence};
+        else small_hits[small_slot].target=0;
+    }
+#endif
     /* Query returns once per actual target, unlike polling the last-contact
      * field next update. The native pass owns every intersection and callback. */
     if((helm||world.move==W_BIG)&&own&&byte(attack,0xb4)==1&&
-       word(attack,0xb0)==(u32)(uptr)target)
-        world_follow_capture((void *)(uptr)world.actor);
+       word(attack,0xb0)==(u32)(uptr)target){
+        void *a=(void *)(uptr)world.actor;
+#if ML_WILDS_MOVES
+        if(helm&&!world_helm_valor_paid&&hunter_style(a)==5){
+            world_helm_valor_paid=1;
+            unsigned before=word(a,0x2790);
+            unsigned after=before+W_VALOR_HELM_GAIN;
+            /* Keep the fixed reward independent of native gain multipliers.
+             * Let GU set its full-meter flag and blue timer at the cap. */
+            if(after>=1000){
+                put(a,0x2790,999);
+                ((void (*)(void *,int))(main_base+0x2a33a8))(a,1);
+            }else{
+                put(a,0x2790,after);
+                set_real(a,0x27dc,60.f);
+            }
+            log_event("valor_helm_reward",(u32)(uptr)a,before,word(a,0x2790),W_VALOR_HELM_GAIN);
+        }
+#endif
+        world_follow_capture(a);
+    }
     return result;
 }
 static unsigned world_burst(void *a,WFollow *job,const float *point)

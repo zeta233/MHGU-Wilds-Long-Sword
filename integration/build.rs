@@ -14,6 +14,9 @@ fn main(){
     println!("cargo:rerun-if-env-changed=ML_RECOMP_RUNTIME");
     println!("cargo:rustc-check-cfg=cfg(ml_recomp_runtime)");
     println!("cargo:rustc-check-cfg=cfg(ml_switch_viewport)");
+    let android=runtime.as_deref()==Ok("android");
+    println!("cargo:rustc-check-cfg=cfg(ml_android_recomp)");
+    if android { println!("cargo:rustc-cfg=ml_android_recomp"); }
     if recomp { println!("cargo:rustc-cfg=ml_recomp_runtime"); }
     if switch_viewport { println!("cargo:rustc-cfg=ml_switch_viewport"); }
     let any_style=env::var("ML_TEST_ANY_STYLE").as_deref()==Ok("1");
@@ -68,6 +71,7 @@ fn main(){
             .arg(if debug_force {"-DML_DEBUG_FORCE=1"} else {"-DML_DEBUG_FORCE=0"})
             .arg(if wilds {"-DML_WILDS_MOVES=1"} else {"-DML_WILDS_MOVES=0"})
             .arg(if recomp {"-DML_RECOMP_RUNTIME=1"} else {"-DML_RECOMP_RUNTIME=0"})
+            .arg(if android {"-DML_ANDROID_RECOMP=1"} else {"-DML_ANDROID_RECOMP=0"})
             .arg(if switch_viewport {"-DML_SWITCH_VIEWPORT=1"} else {"-DML_SWITCH_VIEWPORT=0"})
             .arg(if ascendance {"-DML_ASCENDANCE_PROTOTYPE=1"} else {"-DML_ASCENDANCE_PROTOTYPE=0"})
             .arg(if any_style {"-DML_TEST_ANY_STYLE=1"} else {"-DML_TEST_ANY_STYLE=0"})

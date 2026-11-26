@@ -28,7 +28,7 @@ static void valor_routes(void)
   {120,103,38},{121,103,38},{122,103,38},{123,129,50},{124,129,50},{125,129,50},
   {126,128,50},{127,128,50},{128,128,50},
   {104,106,38},{23,106,44},{24,106,44},{105,108,95},{119,107,38},{102,130,46},{103,131,46},
-  {108,131,46},{109,131,46},{22,105,38},{118,105,38},{143,103,76},{144,103,76},
+  {22,105,38},{118,105,38},{143,103,76},{144,103,76},
   {130,192,44},{130,104,62},{116,191,34},{116,185,22},{117,186,110},
   {134,190,32},{134,184,22},{135,194,50},{135,185,22},{136,191,34},{136,185,22},
   {137,194,50},{137,185,22},{138,191,34},{138,185,22},{139,194,50},{139,185,22},
@@ -49,6 +49,25 @@ static void valor_routes(void)
    assert(world_command_step(&s,&o,0,NULL).move==expected[k]);
   }
  }
+ WState guard={0};
+ WObservation gp=obs();
+ gp.valor=1;gp.rank=0;gp.base.native_action=108;gp.base.motion=0x583;
+ gp.base.held=ML_R|ML_B;gp.base.animation_frame=45;
+ assert(w_valor_guard_release(&guard,&gp,0).kind==W_KEEP);
+ gp.base.animation_frame=46;gp.base.native_action=130;gp.base.motion=0x5c0;
+ assert(w_valor_guard_release(&guard,&gp,0).kind==W_KEEP);
+ gp.base.native_action=108;gp.base.motion=0x583;
+ WDecision release=w_valor_guard_release(&guard,&gp,0);
+ assert(release.move==W_RELEASE&&release.rank_delta==0&&guard.valor_release);
+ gp.base.motion=0x500+guard.slot;gp.base.native_action=w_action(W_RELEASE);
+ assert(tick(&guard,&gp,0,W_VALOR_RELEASE_END-1).kind==W_KEEP);
+ assert(tick(&guard,&gp,0,W_VALOR_RELEASE_END).kind==W_IDLE&&!guard.valor_release);
+ gp.base.native_action=116;gp.base.motion=0x5b9;gp.base.animation_frame=37;
+ assert(w_valor_guard_release(&guard,&gp,1).kind==W_KEEP);
+ gp.base.animation_frame=38;
+ assert(w_valor_guard_release(&guard,&gp,0).kind==W_KEEP);
+ release=w_valor_guard_release(&guard,&gp,1);
+ assert(release.move==W_RELEASE&&release.rank_delta==0&&guard.valor_release);
  /* Each independently cancellable imported strike accepts the partner button
   * in either order. The wound-confirm and airborne phases advance separately. */
  const unsigned strikes[][2]={
@@ -72,11 +91,34 @@ static void valor_routes(void)
   WState s={.move=W_SLIDE,.source=903};
   assert(wilds_spirit(&s,&o,0).native_action==(blue?116:23));
   s=(WState){.move=W_FOCUS,.source=914};
-  assert(wilds_spirit(&s,&o,0).native_action==(blue?117:26));
+  assert(wilds_spirit(&s,&o,0).native_action==(blue?130:26));
   s=(WState){.move=W_CHARGE,.source=908,.wilds_stage=2};
   assert(tick(&s,&o,0,1).kind==W_KEEP);
   assert(tick(&s,&o,ML_R,29).kind==W_KEEP);
   assert(tick(&s,&o,ML_R,30).native_action==(blue?116:23));
+ }
+ const unsigned returns[][2]={{W_CHIJIN,907},{W_FOCUS,905},{W_FOCUS,914},
+                              {W_FOCUS,927},{W_FOCUS,928},{W_FOCUS,929}};
+ for(unsigned i=0;i<sizeof(returns)/sizeof(*returns);++i){
+  unsigned move=returns[i][0],source=returns[i][1],cancel=wilds_clip(source)->cancel;
+  WObservation o=obs();o.valor_style=o.valor=1;
+  WState s={.move=move,.source=source};
+  assert(tick(&s,&o,ML_R,cancel-12).kind==W_KEEP);
+  assert(tick(&s,&o,ML_R|ML_A,cancel-10).kind==W_KEEP);
+  WDecision d=tick(&s,&o,0,cancel);
+  assert(d.kind==W_ENTER&&d.source==918);
+  s=(WState){.move=move,.source=source};
+  assert(tick(&s,&o,ML_R|ML_A,cancel-10).kind==W_KEEP);
+  o.valor=0;
+  assert(tick(&s,&o,0,cancel).kind==W_KEEP);
+  o.valor=1;o.base.magnitude=100;o.base.input_heading=16384;
+  s=(WState){.move=move,.source=source};
+  assert(tick(&s,&o,ML_R,cancel-12).kind==W_KEEP);
+  o.base.magnitude=0;o.base.input_heading=0;
+  for(unsigned early=11;early>0;--early)
+   assert(tick(&s,&o,0,cancel-early).kind==W_KEEP);
+  d=tick(&s,&o,0,cancel);
+  assert(d.kind==W_NATIVE&&d.native_action==130&&d.valor_slide&&d.valor_slide_input==16384);
  }
 }
 

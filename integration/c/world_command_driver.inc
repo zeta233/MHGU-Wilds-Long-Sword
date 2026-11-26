@@ -154,6 +154,11 @@ WDecision w_foresight_press(WState *s,const WObservation *o)
 {
     const MLObservation *b=&o->base;
     const unsigned chord=ML_R|ML_A;
+    if(s->foresight_press.motion&&s->foresight_press.valor!=o->valor){
+        s->foresight_press.motion=0;
+        s->consumed|=b->held&chord;
+        return (WDecision){0};
+    }
     unsigned stage=0;
     float frame=b->animation_frame;
     if(s->actor==b->actor&&s->epoch==b->epoch&&b->eligible&&o->alive&&o->drawn&&
@@ -178,6 +183,7 @@ WDecision w_foresight_press(WState *s,const WObservation *o)
         s->foresight_press.motion=b->motion;
         s->foresight_press.action=b->native_action;
         s->foresight_press.generation=b->bind_generation;
+        s->foresight_press.valor=o->valor;
     }
     if(s->foresight_press.motion!=b->motion||s->foresight_press.action!=b->native_action||
        s->foresight_press.generation!=b->bind_generation){
@@ -384,7 +390,7 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
     if(s->wilds_slide_exit_r&&b->held==ML_R)return (WDecision){0};
 #endif
     unsigned idle=!s->move&&(o->state==1||o->state==2)&&b->native_action<=5&&o->grounded;
-    unsigned air_spirit=!s->move&&o->state==16&&
+    unsigned air_spirit=!o->valor_style&&!s->move&&o->state==16&&
         ((((b->native_action>=42&&b->native_action<=47)||(b->native_action>=76&&b->native_action<=81))&&
           (b->motion==0x598||b->motion==0x568))||
          (b->native_action>=72&&b->native_action<=75&&
@@ -415,6 +421,7 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
     WDecision iai=w_iai_press(s,o);
     if(iai.kind!=W_KEEP)return iai;
     uint32_t permission[8];world_input_permission(source,event,permission);
+    if(o->valor_style)permission[WI_SHEATHE.word]&=~(3u<<WI_SHEATHE.shift);
     const float direction[4]={(float)b->input_heading,0,0,0};
     int delta=ml_heading_delta(b->input_heading,b->heading);
     /* Recorded GU input: positive quarter-turn is the hunter's left.
@@ -425,7 +432,7 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
     if(s->input_motion!=b->motion){w_controls_bind(&s->controls);s->input_motion=b->motion;s->gu_chord_wait=0;}
     /* A short R+B tap can end before the two Foresight cancel windows.
      * Latch only a fresh chord; the source timeline still decides entry. */
-    unsigned sheath_edge=b->held==(ML_R|ML_B)&&
+    unsigned sheath_edge=!o->valor_style&&b->held==(ML_R|ML_B)&&
         !(s->controls.buttons[2].raw&&s->controls.buttons[3].raw);
     w_controls_tick(&s->controls,b->actor,b->epoch,b->sample_sequence,b->held,
         b->simulation_delta/60,permission,direction,b->magnitude>=50,facing,facing);

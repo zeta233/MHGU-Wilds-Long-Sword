@@ -89,6 +89,22 @@ extern "C" fn ml_gauge_glow(value: u32) {
     GAUGE_GLOW.store(value, Ordering::Relaxed);
 }
 
+#[cfg(ml_ascendance_prototype)]
+fn fill_overlay_polygon(dl: &forge::imgui::draw::DrawList, points: &[forge::sys::imgui::ImVec2], color: u32) {
+    // Some Android Forge builds mirror just the first guest array element.
+    // Build the path on the host through the by-value point API.
+    #[cfg(ml_android_recomp)]
+    {
+        dl.path_clear();
+        for &point in points {
+            dl.path_line_to(point);
+        }
+        dl.path_fill_convex(color);
+    }
+    #[cfg(not(ml_android_recomp))]
+    dl.add_convex_poly_filled(points, color);
+}
+
 #[cfg(ml_world_combat)]
 #[forge::imgui_free_render]
 fn draw_gauge_glow() {

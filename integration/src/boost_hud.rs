@@ -2,7 +2,6 @@ use forge::imgui::{color::color, draw::DrawList, font::ImFont, item};
 use forge::sys::imgui::{ImDrawFlags, ImVec2};
 
 const METAL: u32 = 0xff829bb7;
-const RIM: u32 = 0xffbef1fa;
 const RECESS: u32 = 0xf5272019;
 
 fn border(dl: &DrawList, edge: &[ImVec2], tint: u32, width: f32) {
@@ -29,7 +28,7 @@ fn fill_crystal(dl: &DrawList, crystal: &[ImVec2; 6], floor: f32, tint: u32) {
         }
         previous = current;
     }
-    if count>=3 { dl.add_convex_poly_filled(&visible[..count], tint); }
+    if count>=3 { crate::fill_overlay_polygon(dl, &visible[..count], tint); }
 }
 
 pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
@@ -54,8 +53,8 @@ pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
         point(132.0,25.0), point(54.0,25.0), point(36.0,36.0), point(13.0,36.0),
     ];
     let body_tint = color(19,22,27,244);
-    dl.add_convex_poly_filled(&outline[2..8],body_tint);
-    dl.add_convex_poly_filled(&[outline[0],outline[1],outline[2],outline[7],outline[8],outline[9]],body_tint);
+    crate::fill_overlay_polygon(dl, &outline[2..8],body_tint);
+    crate::fill_overlay_polygon(dl, &[outline[0],outline[1],outline[2],outline[7],outline[8],outline[9]],body_tint);
     border(dl,&outline,METAL,0.9*scale);
     dl.add_line(point(57.0,3.0),point(129.0,3.0),color(252,230,184,132),0.7*scale);
     dl.add_line(point(56.0,23.0),point(130.0,23.0),color(100,85,65,220),0.8*scale);
@@ -77,11 +76,11 @@ pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
         dl.add_circle(core,14.0*scale,halo,28,1.8*scale);
     }
     dl.add_circle_filled(core,9.2*scale,main,24);
-    dl.add_convex_poly_filled(&[
+    crate::fill_overlay_polygon(dl, &[
         point(20.0,22.0),point(24.0,16.0),point(31.0,17.0),
         point(34.0,21.0),point(29.0,27.0),point(22.0,27.0),
     ],color(28,33,53,122));
-    dl.add_convex_poly_filled(&[
+    crate::fill_overlay_polygon(dl, &[
         point(25.5,16.0),point(31.0,20.9),point(27.0,27.6),point(21.3,22.5),
     ],glare);
     dl.add_triangle_filled(point(25.5,16.0),point(27.0,24.5),point(21.3,22.5),color(255,244,224,104));
@@ -91,7 +90,7 @@ pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
         dl.add_line(point(19.8,33.2),point(31.8,33.2),color(115,215,255,240),1.05*scale);
     }
 
-    // The arc and crystals use the same timer while Boost is active.
+    // The arc and orange bars show the timer. The crystals always show reserve.
     let arc = [
         (-16.0,0.0),(-15.7,-3.1),(-14.8,-6.1),(-13.3,-8.9),(-11.3,-11.3),
         (-8.9,-13.3),(-6.1,-14.8),(-3.1,-15.7),(0.0,-16.0),
@@ -125,36 +124,28 @@ pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
             point(x+5.0,6.0),point(x+18.0,6.0),point(x+19.5,14.0),
             point(x+12.0,20.0),point(x+2.0,17.0),point(x,12.0),
         ];
-        dl.add_convex_poly_filled(&trim,RECESS);
+        crate::fill_overlay_polygon(dl, &trim,RECESS);
         let stored = (reserve-cell as f32).clamp(0.0,1.0);
-        let part = if active { (fraction*3.0-cell as f32).clamp(0.0,1.0) } else { stored };
-        let rim = if !active && stored>=1.0 { RIM } else if active && part>0.0 {
-            color(226,157,78,240)
-        } else { METAL };
+        let rim = if stored>=1.0 { color(119,210,255,255) } else { METAL };
         border(dl,&trim,rim,0.66*scale);
-        if part>0.0 {
+        if stored>0.0 {
             let crystal=[
                 point(x+6.0,8.0),point(x+16.5,8.0),point(x+17.5,13.5),
                 point(x+12.0,18.0),point(x+3.5,15.5),point(x+2.5,12.2),
             ];
-            let (recess, fill, facet) = if active {
-                let fill = if warning { color(242,76,43,255) } else { color(240,154,55,255) };
-                (color(89,47,24,235),fill,color(255,228,154,235))
-            } else {
-                (color(31,59,90,235),color(59,157,220,255),color(188,234,255,225))
-            };
-            dl.add_convex_poly_filled(&crystal,recess);
-            fill_crystal(dl,&crystal,point(x,18.0-10.0*part).y,fill);
-            if part>=0.995 {
+            crate::fill_overlay_polygon(dl, &crystal,color(31,59,90,235));
+            fill_crystal(dl,&crystal,point(x,18.0-10.0*stored).y,color(59,157,220,255));
+            if stored>=1.0 {
                 dl.add_triangle_filled(point(x+6.5,8.5),point(x+15.2,8.5),
-                    point(x+10.0,13.8),facet);
+                    point(x+10.0,13.8),color(188,234,255,225));
             }
         }
         if active {
-            dl.add_rect_filled(point(x+1.0,21.0),point(x+19.0,23.0),color(31,59,90,235),0.0);
-            if stored>0.0 {
-                let tint = if stored>=1.0 { color(119,210,255,255) } else { color(59,157,220,255) };
-                dl.add_rect_filled(point(x+1.0,21.0),point(x+1.0+18.0*stored,23.0),tint,0.0);
+            let timer=(fraction*3.0-cell as f32).clamp(0.0,1.0);
+            dl.add_rect_filled(point(x+1.0,21.0),point(x+19.0,23.0),color(89,47,24,235),0.0);
+            if timer>0.0 {
+                let tint=if warning { color(242,76,43,255) } else { color(240,154,55,255) };
+                dl.add_rect_filled(point(x+1.0,21.0),point(x+1.0+18.0*timer,23.0),tint,0.0);
             }
         }
     }

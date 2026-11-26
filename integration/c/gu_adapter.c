@@ -131,6 +131,13 @@ void ml_pad_refresh(void)
 {
     ++sample_sequence;
     ml_pad_read();
+#if ML_TRACE_EVENTS
+    static u32 last_trace;
+    if(held!=last_trace){
+        log_event("android_combat_pad",sample_sequence,last_trace,held,0);
+        last_trace=held;
+    }
+#endif
 #if ML_WORLD_COMBAT && ML_WILDS_MOVES
     world_art_poll();
 #endif
@@ -192,7 +199,11 @@ static unsigned ascendance_pad_bits(void *a)
 #include "attachment_data.h"
 #if ML_WILDS_MOVES
 #include "wilds_root_data.h"
+#if ML_ANDROID_RECOMP
+#include "charge_pose_grips_android.h"
+#else
 #include "charge_pose_grips.h"
+#endif
 #include "focus_walk_data.h"
 static const WildsClip *focus_walk_clip(unsigned motion)
 {
@@ -639,7 +650,8 @@ static struct {
     unsigned area,started,socket_motion,start_heading;
     float grip_progress,yaw_lag;
     unsigned last_heading,rear_turn;
-    float initial[7],last;
+    float initial[7],last,release_blade[16];
+    unsigned release;
 } pursuit_idle_grip;
 static unsigned step_round_grip_offsets(void *a,float *yaw,float *pitch);
 /* Preserve the corrected blade pose in joint 12 space at the end of the
@@ -732,10 +744,14 @@ static unsigned pursuit_grip_return(void *a,void *o,unsigned motion,unsigned pos
 {
     float f=real(a,FRAME);
     unsigned flash=motion==0x500+RADIANCE_FLASH_SLOT&&f>=RADIANCE_FLASH_FRAMES-4;
-    if(flash||(motion==0x500+PURSUIT_SECOND_SLOT&&f>=30)||
+    unsigned valor_release_tail=motion==0x500+250&&f>=W_VALOR_RELEASE_END-5&&f<W_VALOR_RELEASE_END+2;
+    if(valor_release_tail||flash||(motion==0x500+PURSUIT_SECOND_SLOT&&f>=30)||
        (motion==0x500+PURSUIT_FIRST_SLOT&&f>=PURSUIT_FIRST_BRANCH)){
         pursuit_idle_grip.owner=a;pursuit_idle_grip.blade=o;
         pursuit_idle_grip.area=byte(a,AREA);pursuit_idle_grip.started=0;
+        pursuit_idle_grip.release=valor_release_tail;
+        if(valor_release_tail)
+            for(unsigned i=0;i<16;++i)pursuit_idle_grip.release_blade[i]=real(o,0xb0+4*i);
         return posed;
     }
     unsigned walk=motion==0x504;
@@ -749,7 +765,13 @@ static unsigned pursuit_grip_return(void *a,void *o,unsigned motion,unsigned pos
         for(unsigned i=0;i<12;++i)pose[i]=real(o,0x40+4*i);
     }
     if(!pursuit_idle_grip.started||pursuit_idle_grip.socket_motion!=motion){
-        if(f>1||*joint>=255||!equipment_joint_pose(a,o,*joint,pursuit_idle_grip.initial)){
+        if(f>1||*joint>=255){
+            pursuit_idle_grip.owner=0;return posed;
+        }
+        const float *before=(const float *)((uptr)o+0xb0);
+        if(pursuit_idle_grip.release&&!pursuit_idle_grip.started)before=pursuit_idle_grip.release_blade;
+        const float *parent=((const float *(*)(void *,u32))(*(uptr **)a)[0x54/4])(a,*joint);
+        if(!attachment_relative_pose(parent,before,pursuit_idle_grip.initial)){
             pursuit_idle_grip.owner=0;return posed;
         }
         pursuit_idle_grip.started=1;pursuit_idle_grip.socket_motion=motion;
@@ -1284,7 +1306,7 @@ static uptr __attribute__((pcs("aapcs-vfp"))) layer_hook(void *a,u32 layer,u32 m
             if(round_idle)
                 round_walk=(__typeof__(round_walk)){.actor=a,.area=byte(a,AREA),.sample=sample_sequence};
 #endif
-            float idle_blend=release_idle?12.f:round_idle?6.f:8.f;
+            float idle_blend=release_idle?((byte(a,DRAWN)&1)?18.f:12.f):round_idle?6.f:8.f;
             if((motion==5001u||(release_idle&&motion==1u)||round_idle)&&blend<idle_blend){
                 flags|=0x81u;blend=idle_blend;
                 if(round_idle)log_event("round_idle_blend",(u32)(uptr)a,motion,flags,(u32)blend);

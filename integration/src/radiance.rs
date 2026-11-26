@@ -37,7 +37,7 @@ fn streak(dl: &DrawList, origin: ImVec2, axis: ImVec2, length: f32, width: f32, 
         p(0.55*length,-0.65*width), p(length,0.0), p(0.55*length,0.65*width),
         p(bias*length,width), p(-0.55*length,0.65*width),
     ];
-    dl.add_convex_poly_filled(&shape, color(rgba.0,rgba.1,rgba.2,rgba.3));
+    crate::fill_overlay_polygon(dl, &shape, color(rgba.0,rgba.1,rgba.2,rgba.3));
 }
 
 pub fn draw(dl: &DrawList, size: ImVec2, scale: f32) {

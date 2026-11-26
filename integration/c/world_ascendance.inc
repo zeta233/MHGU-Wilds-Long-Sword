@@ -6,7 +6,7 @@ enum { DIV_INPUT_NONE, DIV_INPUT_SPIRIT_HELD, DIV_INPUT_ROUND, DIV_INPUT_SHEATHE
 static struct {
     void *actor;
     unsigned area,sample,charge,sheathe,enhanced_iai;
-    unsigned radiance,rt_cancel_pending,radiance_hit,radiance_sample;
+    unsigned radiance,boost_toggle_pending,radiance_hit,radiance_sample;
     float remaining,ready_frames;
     unsigned musou_sheathe_r,flash_r_buffered;
     float walk_speed;
@@ -46,6 +46,9 @@ static const struct {unsigned char clip,group;} musou_chain[]={
 };
 #define MUSOU_STROKE_COUNT (sizeof(musou_chain)/sizeof(*musou_chain))
 #define MUSOU_STROKE_RATE 1.35f
+/* Long Sword Boost 1.1.0 scales the whole Musou sequence by 1.15 × 1.30.
+ * The delayed burst already inherits this from its recorded blade hit. */
+static const float musou_damage_multiplier=1.15f*1.30f;
 /* The reference scales the authored 4.8 m by 2.5. The return uses the
  * actual displacement after floor and wall collision. */
 #define MUSOU_DASH_UNITS 1200
@@ -234,13 +237,13 @@ static float ascendance_attack_scale(void *attack)
     if(!a||(uptr)attack!=(uptr)a+0x3020||!ascendance_owner(a))return 1.0f;
     if(musou.phase&&ascendance_owned_blade(attack)){
         if(musou.phase==MUSOU_FLURRY){
-            if(!musou_clip(u16(a,MOTION)))return .56f;
-            if(musou_spin_slot(world.slot))return .275f;
-            return world.slot==musou_strokes[MUSOU_SPIN].slot?.55f:.43f;
+            if(!musou_clip(u16(a,MOTION)))return .56f*musou_damage_multiplier;
+            if(musou_spin_slot(world.slot))return .275f*musou_damage_multiplier;
+            return (world.slot==musou_strokes[MUSOU_SPIN].slot?.55f:.43f)*musou_damage_multiplier;
         }
-        if(musou.opening_path)return 1.05f;
+        if(musou.opening_path)return 1.05f*musou_damage_multiplier;
         float bonus=musou.hits>=2?musou.hits*(musou.phase==MUSOU_DASH?.10f:.16f):0;
-        return 1.05f+bonus;
+        return (1.05f+bonus)*musou_damage_multiplier;
     }
     if(ascendance.enhanced_iai&&world.move==W_BIG&&world_attack_owned&&
        world_attack_actor==(u32)(uptr)a&&u16(attack,0x34)==world_attack_id)
@@ -1934,7 +1937,7 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
             }
             ascendance_spend_reserve();
             ascendance.radiance=RADIANCE_HOLD;
-            ascendance.rt_cancel_pending=0;
+            ascendance.boost_toggle_pending=0;
             ascendance.flash_step_release=0;
             ascendance.radiance_hit=0;
             ascendance.flash_r_buffered=0;
@@ -2049,31 +2052,23 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
         !ascendance.radiance&&world_bound&&world_bound_actor==(u32)(uptr)a&&
         o->state==16&&b->native_action==w_action(W_SHEATHE)&&
         b->motion==0x500+RADIANCE_HOLD_SLOT&&o->alive&&o->drawn;
-    unsigned cancel=0;
-    /* A solo RT press can start the Radiance chord. Commit a toggle-off
-     * on release only if the trigger was used alone. */
-    if(ascendance.rt_cancel_pending){
-        if(!idle||!o->grounded||!ascendance.remaining||b->held||!solo_ascendance_rt(a))
-            ascendance.rt_cancel_pending=0;
-        else if(!(raw&PAD_BOOST)&&b->simulation_delta>0){
-            ascendance.rt_cancel_pending=0;
-            cancel=1;
+    unsigned toggle_available=o->grounded&&!b->held&&(idle||(ordinary_sheathe&&ascendance.remaining<=0));
+    /* The boost key can lead the Radiance chord by several frames. Spend a
+     * reserve for standalone ignition only after an unaccompanied release. */
+    if(!toggle_available){
+        ascendance.boost_toggle_pending=0;
+    }else if(b->simulation_delta>0){
+        if(edge&PAD_BOOST)ascendance.boost_toggle_pending=1;
+        if(ascendance.boost_toggle_pending&&!(raw&PAD_BOOST)){
+            ascendance.boost_toggle_pending=0;
+            if(ascendance.remaining>0){
+                ascendance.remaining=0;
+                log_event("ascendance_end",(u32)(uptr)a,1,0,0);
+            }else if(ascendance.charge>=BOOST_COST){
+                ascendance_spend_reserve();
+                log_event("ascendance_start",(u32)(uptr)a,25,ordinary_sheathe,ordinary_sheathe?(u32)b->animation_frame:0);
+            }
         }
-    }
-    if((edge&PAD_BOOST)&&!b->held&&o->grounded&&b->simulation_delta>0&&
-       (idle||(ordinary_sheathe&&ascendance.remaining<=0))){
-        if(ascendance.remaining>0&&idle){
-            ascendance.rt_cancel_pending=solo_ascendance_rt(a);
-            cancel=!ascendance.rt_cancel_pending;
-        }else if(ascendance.charge>=BOOST_COST){
-            ascendance_spend_reserve();
-            /* The current sheathe and its native clock continue through ignition. */
-            log_event("ascendance_start",(u32)(uptr)a,25,ordinary_sheathe,ordinary_sheathe?(u32)b->animation_frame:0);
-        }
-    }
-    if(cancel){
-        ascendance.remaining=0;
-        log_event("ascendance_end",(u32)(uptr)a,1,0,0);
     }
     unsigned active=ascendance.remaining>0;
     unsigned remaining=active?(unsigned)((ascendance.remaining*100.f+BOOST_DURATION-1)/BOOST_DURATION):0;
