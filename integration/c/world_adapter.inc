@@ -2407,6 +2407,50 @@ static unsigned world_radiance_contact_entry(void *a)
     ascendance.radiance_entry_counter=1;
     return 1;
 }
+
+static unsigned world_dividing_round_tail(void *a,const MLObservation *b)
+{
+    if(!ascendance.dividing_exit_sample||world.move)return 0;
+    unsigned age=b->sample_sequence-ascendance.dividing_exit_sample;
+    /* A press started in the recovery window keeps its full hold threshold. */
+    if(age>W_CHARGED_THREE_POST_SAMPLES&&
+       (age>44||ascendance.dividing_input!=DIV_INPUT_SPIRIT_HELD))return 0;
+    unsigned state=u16(a,STATE);
+    return (state==1||state==2)&&b->native_action<=5&&ascendance_owner(a)&&
+        (byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&world_ready(a)&&
+        (b->gauge>=25||crimson_available(a));
+}
+
+static void world_dividing_spirit_hold(const MLObservation *b)
+{
+    if(ascendance.dividing_input!=DIV_INPUT_SPIRIT_HELD)return;
+    if(!(b->held&ML_R)){
+        ascendance.dividing_input=DIV_INPUT_ROUND;
+    }else if(ascendance.dividing_sample!=b->sample_sequence){
+        ascendance.dividing_sample=b->sample_sequence;
+        if(b->simulation_delta>0&&b->simulation_delta<=15)
+            ascendance.dividing_hold_ticks+=b->simulation_delta;
+        if(ascendance.dividing_hold_ticks>=W_SPIRIT_FULL_HOLD_SECONDS*60.f)
+            ascendance.dividing_input=DIV_INPUT_CHARGE;
+    }
+}
+
+static WDecision world_dividing_round(const WObservation *o,unsigned step)
+{
+    unsigned route=ascendance.dividing_input;
+    if(route!=DIV_INPUT_ROUND&&route!=DIV_INPUT_CHARGE)return (WDecision){0};
+    ascendance.dividing_input=DIV_INPUT_NONE;
+    WDecision d=route==DIV_INPUT_CHARGE?w_wilds_round_charge(&world,o):w_wilds_round(&world,o);
+    if(d.kind!=W_ENTER)return d;
+    if(route==DIV_INPUT_CHARGE)
+        log_event("dividing_charge",d.slot,(u32)o->base.animation_frame,(u32)ascendance.dividing_hold_ticks,d.slot);
+    else{
+        if(step){d.motion_contract=1;d.blend=8;d.speed=1;}
+        log_event("dividing_round",(u32)o->base.animation_frame,d.slot,step,0);
+    }
+    ascendance.dividing_exit_sample=0;
+    return d;
+}
 #endif
 static unsigned world_request(void *a,unsigned state,unsigned action,unsigned flags)
 {
@@ -2428,6 +2472,8 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
        (w_guild_attack(action)||action==41||(action>=87&&action<=144)))return 1;
     if(valor_second_pose(a)&&spirit_three&&!(raw.held&~ML_R))return 1;
 #if ML_ASCENDANCE_PROTOTYPE
+    if(state==16&&(action==16||action==17)&&!(raw.held&~ML_R)&&
+       world_dividing_round_tail(a,&raw))return 1;
     if(world_radiance_input_reserved(a,bits,raw.held)&&
        ((state==16&&(w_guild_attack(action)||action==41))||
         ((state==1||state==2)&&action<=14&&action>5)))
@@ -3380,9 +3426,27 @@ static unsigned world_update(void *a,const MLObservation *b)
 #endif
 #if ML_ASCENDANCE_PROTOTYPE
     unsigned dividing_bound=world.move==W_SMALL&&dividing_slot(world.slot)&&world_bound&&
-        o.state==16&&b->native_action==w_action(W_SMALL)&&b->motion==0x500+world.slot;
-    if(d.kind==W_KEEP&&dividing_bound&&o.grounded&&o.drawn&&o.alive&&o.resources_ready){
-        unsigned step=world.slot==DIVIDING_STEP_SLOT;
+        o.state==16&&b->native_action==w_action(W_SMALL)&&b->motion==0x500+world.slot&&
+        o.grounded&&o.drawn&&o.alive&&o.resources_ready;
+    unsigned dividing_step=world.slot==DIVIDING_STEP_SLOT;
+    unsigned dividing_cancel=dividing_bound&&b->animation_frame>=(dividing_step?70:42);
+    if(ascendance.dividing_exit_sample){
+        if(!world_dividing_round_tail(a,b)||(b->held&~ML_R)){
+            ascendance.dividing_exit_sample=0;
+            ascendance.dividing_input=DIV_INPUT_NONE;
+        }else if(d.kind==W_KEEP){
+            if((edge&PAD_R)&&b->held==ML_R){
+                ascendance.dividing_input=DIV_INPUT_SPIRIT_HELD;
+                ascendance.dividing_hold_ticks=0;
+                ascendance.dividing_sample=b->sample_sequence;
+            }
+            world_dividing_spirit_hold(b);
+            d=world_dividing_round(&o,0);
+            if(ascendance.dividing_input==DIV_INPUT_SPIRIT_HELD)o.base.held=0;
+        }
+    }
+    if(d.kind==W_KEEP&&dividing_bound){
+        unsigned step=dividing_step;
         unsigned eligible=!step||b->animation_frame>=35;
         if(b->held==(ML_R|ML_B)&&(edge&(PAD_R|0x4000))){
             ascendance.dividing_input=eligible?DIV_INPUT_SHEATHE:DIV_INPUT_NONE;
@@ -3409,20 +3473,12 @@ static unsigned world_update(void *a,const MLObservation *b)
         }else if(b->held!=(ML_R|ML_A)&&b->held!=(ML_R|ML_X)&&b->held!=(ML_X|ML_A)&&b->held!=ML_X&&b->held!=ML_A&&(b->held&~(ML_R|ML_B))){
             ascendance.dividing_input=DIV_INPUT_NONE;
         }
-        if(ascendance.dividing_input==DIV_INPUT_SPIRIT_HELD){
-            if(!(b->held&ML_R)){
-                ascendance.dividing_input=DIV_INPUT_ROUND;
-            }else if(ascendance.dividing_sample!=b->sample_sequence){
-                ascendance.dividing_sample=b->sample_sequence;
-                if(b->simulation_delta>0&&b->simulation_delta<=15)
-                    ascendance.dividing_hold_ticks+=b->simulation_delta;
-                if(ascendance.dividing_hold_ticks>=W_SPIRIT_FULL_HOLD_SECONDS*60.f)
-                    ascendance.dividing_input=DIV_INPUT_CHARGE;
-            }
-        }
-        if(b->animation_frame>=(step?168:140)||b->motion_finished){
+        world_dividing_spirit_hold(b);
+        unsigned finished=b->animation_frame>=(step?168:140)||b->motion_finished;
+        if(dividing_cancel)d=world_dividing_round(&o,step);
+        if(d.kind==W_KEEP&&finished){
             d=w_leave(&world);d.kind=W_IDLE;
-        }else if(b->animation_frame>=(step?70:42)){
+        }else if(d.kind==W_KEEP&&dividing_cancel){
             if(ascendance.dividing_input==DIV_INPUT_PRIMARY){
                 ascendance.dividing_input=DIV_INPUT_NONE;
                 if(o.rank==3){
@@ -3455,21 +3511,6 @@ static unsigned world_update(void *a,const MLObservation *b)
                 ascendance.dividing_input=DIV_INPUT_NONE;
                 d=w_dividing_sheathe(&world,&o);
                 if(d.kind==W_ENTER)log_event("dividing_sheathe",(u32)b->animation_frame,d.slot,step,0);
-            }else if(ascendance.dividing_input==DIV_INPUT_CHARGE){
-                ascendance.dividing_input=DIV_INPUT_NONE;
-                d=w_wilds_round_charge(&world,&o);
-                if(d.kind==W_ENTER)
-                    log_event("dividing_charge",world.slot,(u32)b->animation_frame,(u32)ascendance.dividing_hold_ticks,d.slot);
-            }else if(ascendance.dividing_input==DIV_INPUT_ROUND){
-                ascendance.dividing_input=DIV_INPUT_NONE;
-                d=w_wilds_round(&world,&o);
-                if(d.kind==W_ENTER){
-                    if(step){
-                        /* Keep the planted step pose while the round starts at F0. */
-                        d.motion_contract=1;d.blend=8;d.speed=1;
-                    }
-                    log_event("dividing_round",(u32)b->animation_frame,d.slot,step,0);
-                }
             }
         }
     }else if(d.kind==W_KEEP&&!world.move&&ascendance_owner(a)&&ascendance.remaining>0&&
@@ -3521,6 +3562,15 @@ static unsigned world_update(void *a,const MLObservation *b)
     }
 #endif
     if(d.kind==W_KEEP)d=w_step(&world,&o);
+#if ML_ASCENDANCE_PROTOTYPE
+    /* The common motion driver can end this clip before its adapter cutoff. */
+    if(d.kind==W_IDLE&&dividing_cancel&&!(b->held&~ML_R)&&
+       (!b->held||ascendance.dividing_input==DIV_INPUT_SPIRIT_HELD)){
+        ascendance.dividing_exit_sample=b->sample_sequence;
+        log_event("dividing_recovery",b->sample_sequence,ascendance.dividing_input,
+            (u32)b->animation_frame,dividing_step);
+    }
+#endif
 #if ML_WILDS_MOVES
     /* Spend the native cost once and use the direction from the new R press. */
     if(d.kind==W_KEEP&&!guard_second&&o.valor&&o.alive&&o.drawn&&o.grounded&&!world.move&&

@@ -1,6 +1,6 @@
-荒野太刀 · 凌越扩展 v0.280｜Android MHGU Recomp
+荒野太刀 · 凌越扩展 v0.283｜Android MHGU Recomp
 
-v0.280 安卓包已通过构建和附件校验。
+v0.283 安卓包已通过构建和附件校验。
 
 v0.271 安卓修复的实体机验证环境
 荣耀 Magic8 Pro，com.mhgu.xth 0.2.1，Forge 2.0.0，任务分辨率 2808×1256。

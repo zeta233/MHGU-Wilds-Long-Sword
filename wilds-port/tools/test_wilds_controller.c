@@ -504,6 +504,13 @@ int main(void){
  o=obs();w_reset(&s);s.move=W_LAND;s.wilds_helm_red=1;s.rank=2;o.rank=2;
  o.base.magnitude=100;o.base.input_heading=16384;o.base.heading=1234;
  d=w_wilds_enter(&s,&o,W_RELEASE);assert(d.heading==1234);
+ /* A roll tapped during Helm Breaker release seating waits for the sheath. */
+ assert(tick(&s,&o,ML_B,126).kind==W_KEEP);
+ for(unsigned frame=127;frame<W_RELEASE_SHEATHE_FRAME;++frame)
+  assert(tick(&s,&o,0,frame).kind==W_KEEP);
+ o.drawn=0;
+ d=tick(&s,&o,0,W_RELEASE_SHEATHE_FRAME);
+ assert(d.kind==W_ROLL&&d.sheathed_roll&&d.heading==16384);
  o=obs();w_reset(&s);w_wilds_round(&s,&o);wilds_phase(&s,&o,917);
  o.base.magnitude=100;
  assert(tick(&s,&o,0,wilds_clip(917)->frames-2).kind==W_KEEP);

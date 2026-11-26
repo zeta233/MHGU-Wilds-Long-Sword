@@ -647,11 +647,19 @@ static WDecision wilds_step(WState *s,const WObservation *o)
     }
     /* Buffer the final twelve recovery frames so an early evade tap is not
      * swallowed by the native request filter while our action owns the slot. */
+    unsigned release_sheathe=s->move==W_RELEASE&&!s->valor_release;
     if((pressed&ML_B)&&!(b->held&ML_ZR)&&frame+12>=clip->cancel){
-        s->wilds_roll_buffer=.25f;s->wilds_roll_mod=b->held&ML_R;
+        s->wilds_roll_buffer=release_sheathe?.5f:.25f;s->wilds_roll_mod=b->held&ML_R;
         s->wilds_roll_heading=b->magnitude>=50?b->input_heading:b->heading;
     }
     if(frame>=clip->cancel&&s->wilds_roll_buffer>0){
+        if(release_sheathe&&!s->wilds_roll_mod&&!(b->held&ML_R)){
+            /* Keep the buffered roll until the blade seats in the scabbard. */
+            if(frame<W_RELEASE_SHEATHE_FRAME&&!b->motion_finished)return (WDecision){0};
+            WDecision d=wilds_finish(s,W_ROLL,s->wilds_roll_heading);
+            d.sheathed_roll=1;
+            return d;
+        }
         if(s->wilds_roll_mod||(b->held&ML_R)){
             if(!o->valor)return enter(s,o,W_SHEATHE,ML_R|ML_B);
             s->wilds_roll_buffer=0;

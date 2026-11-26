@@ -23,6 +23,7 @@ static struct {
     unsigned double_resheathe_step;
     unsigned quest;
     unsigned radiance_entry_sample,radiance_entry_counter;
+    unsigned dividing_exit_sample;
 } ascendance;
 
 /* Pursuit follows the particular monster whose native reaction accepted
@@ -595,14 +596,6 @@ static float ascendance_flash_rate(float frame)
     return 1.6f;
 }
 
-static float ascendance_entry_rate(float frame)
-{
-    if(frame<=44)return 1.f;
-    if(frame<48)return 1.f+.4f*ascendance_ease((frame-44)/4);
-    if(frame<86)return 1.4f;
-    return 1.f;
-}
-
 /* Linear lookup in a per-frame rate table; the tables are one entry per frame. */
 static float ascendance_rate_at(const float *table,unsigned count,float frame)
 {
@@ -626,7 +619,6 @@ static float ascendance_frame_speed(void *a)
         return ascendance_rate_at(pursuit_second_rates,PURSUIT_SECOND_FRAMES,frame);
     if(ascendance_independent_flash())return ascendance_flash_rate(frame);
     if(ascendance.radiance==RADIANCE_HOLD&&motion==0x500+RADIANCE_WALK_SLOT)return ascendance_walk_rate();
-    if(motion==0x500+ENHANCED_SHEATHE_SLOT)return ascendance_entry_rate(frame);
     if(musou.phase==MUSOU_FLURRY&&!musou_spin_slot(world.slot)){
         /* Every flurry cut is baked as 18 frames (15 authored + 3 tail); 1.2
          * plays it in the reference's 15-tick cut interval. */
