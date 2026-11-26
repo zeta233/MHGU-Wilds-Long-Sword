@@ -1,6 +1,8 @@
-param([ValidateSet('Recomp','Android','Switch')][string]$Platform = 'Recomp')
+param([ValidateSet('Recomp','Android','Switch')][string]$Platform = 'Recomp', [switch]$SwapRZR, [string]$OutputPath)
 $ErrorActionPreference = 'Stop'
+$output = if ($OutputPath) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath) }
 $env:ML_RECOMP_RUNTIME = @{Recomp='1'; Android='android'; Switch='0'}[$Platform]
+$env:ML_SWAP_R_ZR = if ($SwapRZR) {'1'} else {'0'}
 foreach ($name in 'ML_ANIMATION_PREVIEW','ML_ATTACHMENT_PREVIEW','ML_DEBUG_FORCE','ML_TEST_ANY_STYLE','ML_WORLD_AUDIO_PROBE','ML_WORLD_FX_PROBE','ML_ART_FIXTURE','ML_TRACE_EVENTS') {
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
@@ -11,5 +13,6 @@ Push-Location (Join-Path $PSScriptRoot '../integration')
 try {
     cargo forge build --release
     if ($LASTEXITCODE -ne 0) { throw "cargo forge failed ($LASTEXITCODE)" }
+    if ($output) { Copy-Item -LiteralPath mhw_ls_rebuild.nro -Destination $output }
     Get-FileHash mhw_ls_rebuild.nro
 } finally { Pop-Location }

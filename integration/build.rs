@@ -8,6 +8,11 @@ fn main(){
     let combat=env::var("ML_WORLD_COMBAT").as_deref()==Ok("1");
     let debug_force=env::var("ML_DEBUG_FORCE").as_deref()==Ok("1");
     let wilds=env::var("ML_WILDS_MOVES").as_deref()==Ok("1");
+    let shoulder_swap=env::var("ML_SWAP_R_ZR").as_deref()==Ok("1");
+    assert!(!shoulder_swap||(combat&&wilds),"R/ZR swap requires Wilds combat");
+    println!("cargo:rerun-if-env-changed=ML_SWAP_R_ZR");
+    println!("cargo:rustc-check-cfg=cfg(ml_swap_r_zr)");
+    if shoulder_swap { println!("cargo:rustc-cfg=ml_swap_r_zr"); }
     let runtime=env::var("ML_RECOMP_RUNTIME");
     let switch_viewport=runtime.as_deref()==Ok("0");
     let recomp=!switch_viewport&&runtime.as_deref()!=Ok("android");
@@ -70,6 +75,7 @@ fn main(){
             .arg(if combat {"-DML_WORLD_COMBAT=1"} else {"-DML_WORLD_COMBAT=0"})
             .arg(if debug_force {"-DML_DEBUG_FORCE=1"} else {"-DML_DEBUG_FORCE=0"})
             .arg(if wilds {"-DML_WILDS_MOVES=1"} else {"-DML_WILDS_MOVES=0"})
+            .arg(if shoulder_swap {"-DML_SWAP_R_ZR=1"} else {"-DML_SWAP_R_ZR=0"})
             .arg(if recomp {"-DML_RECOMP_RUNTIME=1"} else {"-DML_RECOMP_RUNTIME=0"})
             .arg(if android {"-DML_ANDROID_RECOMP=1"} else {"-DML_ANDROID_RECOMP=0"})
             .arg(if switch_viewport {"-DML_SWITCH_VIEWPORT=1"} else {"-DML_SWITCH_VIEWPORT=0"})

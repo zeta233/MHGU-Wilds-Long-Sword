@@ -8,6 +8,8 @@ use core::sync::atomic::{AtomicU32,AtomicU64,Ordering};
 use forge::log::prelude::*;
 static BASE:AtomicU32=AtomicU32::new(0);
 unsafe extern "C" {fn ml_install(base:u32)->u32;fn ml_pad_refresh();}
+#[cfg(ml_swap_r_zr)]
+unsafe extern "C" {fn ml_shoulder_swap_installed()->u32;}
 
 #[forge::hook(offset=0x003D_E064)]
 fn sample_pad(object:u32)->u32{
@@ -36,6 +38,13 @@ fn main(){
     if installed==0 {error!("[ml-rebuild] native guards rejected; controller remains inactive");return;}
     BASE.store(base,Ordering::Relaxed);
     forge::install_hook!(base,sample_pad);
+    #[cfg(ml_swap_r_zr)]
+    if unsafe { ml_shoulder_swap_installed() } != 0 {
+        info!("[ml-rebuild] R/ZR combat swap enabled; physical R sprints");
+        return;
+    } else {
+        error!("[ml-rebuild] R/ZR swap unavailable; using default controls");
+    }
     info!("[ml-rebuild] installed; Guild only; R/ZR separate; native collision retained");
 }
 

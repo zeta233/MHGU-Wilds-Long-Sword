@@ -1,6 +1,6 @@
-荒野太刀 · 凌越扩展 v0.271｜Android MHGU Recomp
+荒野太刀 · 凌越扩展 v0.272｜Android MHGU Recomp
 
-实体机已验证
+v0.271 安卓修复的实体机验证环境
 荣耀 Magic8 Pro，com.mhgu.xth 0.2.1，Forge 2.0.0，任务分辨率 2808×1256。
 修复小型怪物有效命中未计入增幅护腕以及蓄力持刀姿势过早接近满蓄的问题。必须一起使用本包中的插件和 w07.arc。
 
@@ -9,5 +9,6 @@
 2. 从 Files／文件页选择「导入模组 ZIP」，导入本文件后重新打开游戏。确认新版本已启用。
 3. 手动安装时，解压出 Wilds-LS-World 文件夹，放到游戏实际配置的文件目录下的 mods 内。例如本次真机使用 /storage/emulated/0/mhgu/MHGU/mods/。
 4. 升级旧版时请同时替换 romfs/nativeNX/plugins/mhw_ls_rebuild.nro 和 romfs/nativeNX/arc/player/quest/w07.arc。
+5. 如需互换 R／ZR，安装同版本 Android Recomp 可选补丁，按补丁说明替换或恢复插件。
 
 详细按键见同包《安装与按键说明.txt》。手柄集中模式为 ZL，操作类型 0 支持用方向键发动狩技。

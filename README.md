@@ -6,9 +6,15 @@
 
 保存并退出游戏，使用 Windows 版 MHGU Recomp 0.17.9 和 Switch Forge v1.5.1 前置。将完整安装包中的 Wilds-LS-World 文件夹解压到游戏的 mods 目录。更新前先将旧版移出 mods 备份。光辉闪斩与追击二刀的屏幕径向模糊和折射需要同一发布页提供的 Recomp 后处理补丁。
 
-[Windows、Eden 与 Switch 发布包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.262) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
+[Windows、安卓、Eden 与 Switch 发布包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/latest) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
 
 Android Recomp 可通过 Files 页导入安卓完整包。v0.271 已在荣耀 Magic8 Pro 上用 MHGU Relink 0.2.1（Forge 2.0.0）和 2808×1256 分辨率完成真机复测。 [安卓 v0.271 发布包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.271) · [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
+
+## v0.272 更新
+
+- Windows Recomp、安卓 Recomp、Eden 和 Switch Atmosphère 同步更新勇气派生和护腕逻辑。刚一 GP 后可接刚二或不收刀的练气解放斩。登龙有效命中回复勇气槽。
+- 四个平台均提供可选 R／ZR 互换补丁。收刀奔跑仍用方向＋R。气刃斩等原 R 招式改用 ZR，切换增幅和光辉纳刀改用 R。完整包使用默认键位，可选补丁附默认插件供恢复。
+- 后续发布默认同步四个平台。 [发布流程](scripts/RELEASE.md)
 
 ## v0.271 安卓更新
 

@@ -32,6 +32,11 @@ static unsigned musou_stance_motion(unsigned motion){return motion==0x500+MUSOU_
 #if ML_WORLD_COMBAT
 #include "world_core.h"
 #endif
+#if ML_SWAP_R_ZR
+#include "shoulder_swap.h"
+static unsigned (*original_quest_input)(void *);
+unsigned ml_shoulder_swap_installed(void){return original_quest_input!=0;}
+#endif
 typedef uint32_t u32;
 typedef uintptr_t uptr;
 typedef u32 (*NativeCall)(void *,u32,u32,u32);
@@ -107,13 +112,22 @@ static unsigned hunter_art_x_chord(u32 raw)
     return buttons==(byte(options,0x446e)?0x1100u:0x1400u);
 }
 #endif
+#if ML_SWAP_R_ZR
+static u32 ml_combat_pad_bits(u32 bits)
+{
+    if(original_quest_input)return ml_swap_shoulders(bits,PAD_PHYSICAL_R,PAD_PHYSICAL_ZR);
+    return bits;
+}
+#else
+#define ml_combat_pad_bits(bits) (bits)
+#endif
 static void ml_pad_read(void)
 {
     if(!installed)return;
     held=0;pad_valid=0;
     uptr pad=*(uptr *)(main_base+0x2126888);if(!pad||(pad&3))return;
     int index=*(int *)(pad+0x6b60);if(index<0||index>8)return;
-    u32 raw=*(u32 *)(pad+(u32)index*0xb50+0x1d0);
+    u32 raw=ml_combat_pad_bits(*(u32 *)(pad+(u32)index*0xb50+0x1d0));
     held=((raw&0x1000)?ML_X:0)|((raw&0x2000)?ML_A:0)|((raw&0x200)?ML_R:0)|
          ((raw&0x4000)?ML_B:0)|((raw&0x8000)?ML_Y:0)|((raw&0x800)?ML_ZR:0);
 #if ML_WILDS_MOVES
@@ -148,7 +162,7 @@ u32 ml_pad_raw_bits(void)
     if(!pad||(pad&3))return 0;
     int index=*(int *)(pad+0x6b60);
     if(index<0||index>8)return 0;
-    return *(u32 *)(pad+(u32)index*0xb50+0x1d0);
+    return ml_combat_pad_bits(*(u32 *)(pad+(u32)index*0xb50+0x1d0));
 }
 static unsigned hunter_style(void *a)
 {
@@ -169,6 +183,29 @@ static unsigned local_supported(void *a)
     return style==0 || (ML_WILDS_MOVES && style==5);
 #endif
 }
+#if ML_SWAP_R_ZR
+/* Quest players consume the translated pad at sPad+0x6b98. Limit the
+ * replacement to this hunter's native command generation and restore it
+ * before menus, cameras or other players can read the same pad object. */
+static unsigned quest_input(void *a)
+{
+    uptr pad=word((const void *)main_base,0x188c670);
+    if(!installed||!local_supported(a)||!pad)return original_quest_input(a);
+    u32 *buttons=(u32 *)(pad+0x6b98);
+    u32 held=buttons[1],previous=buttons[2],pressed=buttons[3],released=buttons[4];
+    unsigned state=u16(a,STATE),action=u16(a,ACTION);
+    unsigned locomotion=((state==1||state==2)&&action<=5)||w_uphill_run(state,action);
+    unsigned can_sprint=!(byte(a,DRAWN)&1)&&locomotion&&!(word(a,AIR)&0x400u);
+    unsigned sprint=((unsigned (*)(void))(main_base+0x65f93c))();
+    buttons[1]=ml_gu_shoulders(held,can_sprint,sprint);
+    buttons[2]=ml_gu_shoulders(previous,can_sprint,sprint);
+    buttons[3]=(pressed&~(GU_BUTTON_R|GU_BUTTON_ZR))|((buttons[1]&~buttons[2])&(GU_BUTTON_R|GU_BUTTON_ZR));
+    buttons[4]=(released&~(GU_BUTTON_R|GU_BUTTON_ZR))|((buttons[2]&~buttons[1])&(GU_BUTTON_R|GU_BUTTON_ZR));
+    unsigned result=original_quest_input(a);
+    buttons[1]=held;buttons[2]=previous;buttons[3]=pressed;buttons[4]=released;
+    return result;
+}
+#endif
 #if ML_ASCENDANCE_PROTOTYPE
 static unsigned solo_ascendance_rt(void *a)
 {
@@ -1502,6 +1539,12 @@ u32 ml_install(u32 base)
 #endif
 #if ML_WORLD_COMBAT
     if(!world_install()){restore();log_event("world_combat_guard_refused",0,0,0,0);return 0;}
+#endif
+#if ML_SWAP_R_ZR
+    const u32 *input_entry=(const u32 *)(main_base+0x2a79cc);
+    if(input_entry[0]==0xe92d4ff0u&&input_entry[1]==0xe24dd014u)
+        forge_hook_create((void *)input_entry,(void *)quest_input,(void **)&original_quest_input);
+    log_event("shoulder_swap",0,original_quest_input!=0,0,0);
 #endif
     installed=1;log_event("clean_backend_installed",0,4,0x2ab670,8);return 1;
 }

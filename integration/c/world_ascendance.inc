@@ -2053,6 +2053,12 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
         o->state==16&&b->native_action==w_action(W_SHEATHE)&&
         b->motion==0x500+RADIANCE_HOLD_SLOT&&o->alive&&o->drawn;
     unsigned toggle_available=o->grounded&&!b->held&&(idle||(ordinary_sheathe&&ascendance.remaining<=0));
+#if ML_SWAP_R_ZR
+    /* A physical R hold used for sheathed movement must not ignite or end
+     * Ascendance on release, even when the stick returns at the same time. */
+    if(original_quest_input&&!o->drawn&&(b->magnitude>=50||w_uphill_run(o->state,b->native_action)))
+        toggle_available=0;
+#endif
     /* The boost key can lead the Radiance chord by several frames. Spend a
      * reserve for standalone ignition only after an unaccompanied release. */
     if(!toggle_available){
