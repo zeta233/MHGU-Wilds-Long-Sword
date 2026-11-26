@@ -36,7 +36,7 @@ typedef struct {
     unsigned state,drawn,alive,grounded,rank,contact,counter,resources_ready;
     unsigned previous_weapon_action;
     unsigned focus_strike,valor,valor_style,valor_move,valor_draw_cancel;
-    unsigned focus_camera_heading,has_focus_heading;
+    unsigned focus_camera_heading,has_focus_heading,focus_active;
     unsigned ascendance_active,dividing_stick_heading,rising_sprint;
 } WObservation;
 typedef struct {
@@ -44,7 +44,7 @@ typedef struct {
     int rank_delta,gauge_delta;
     unsigned gauge_clear,gauge_fill,regen_seconds;
     unsigned valor_gain,valor_foresight_second;
-    unsigned red_recovery;
+    unsigned red_recovery,counter_resheathe;
     unsigned motion_contract,crimson_direction,sheathed_roll;
     unsigned valor_slide,valor_slide_heading,valor_slide_input;
     unsigned dividing_step_requested,dividing_step_heading;
@@ -62,7 +62,7 @@ typedef struct {
         unsigned motion,action,generation,valor;
     } foresight_press;
     struct {
-        unsigned motion,generation,held,pending;
+        unsigned motion,generation,held,pending,exit_sample;
     } round_follow;
     unsigned queued_word,queued_shift,queued_heading;
     unsigned counter_success,hit_success,rank_paid,follow_ready;
@@ -82,11 +82,12 @@ typedef struct {
     float wilds_r_wait;
     unsigned wilds_stage,wilds_chain_source,wilds_bridge_sample,wilds_bridge_held,wilds_helm_red;
     float wilds_bridge_hold;
+    unsigned wilds_native_three_sample;
     float wilds_charge_carry;
     unsigned wilds_charge_carry_source,wilds_charge_carry_action;
-    unsigned wilds_charge_open,wilds_charge_link,wilds_three_exit_r,wilds_three_exit_sample,wilds_red_three_held;
+    unsigned wilds_charge_open,wilds_charge_link,wilds_three_exit_r,wilds_three_exit_sample,wilds_native_three_held;
     unsigned wilds_slide_exit_sample,wilds_slide_exit_r,wilds_native_r_spent;
-    unsigned red_foresight_chain,valor_foresight,valor_foresight_r;
+    unsigned red_foresight_chain,valor_foresight,valor_foresight_r,foresight_focus;
     unsigned wilds_direction_pending,wilds_direction_heading,wilds_direction_input;
     float wilds_direction_age;
     float entry_start;
@@ -104,6 +105,21 @@ enum {W_SPIRIT_CRIMSON_INPUT=1,W_SPIRIT_CRIMSON_NEXT};
 #define W_SPIRIT_FULL_HOLD_SECONDS .18f
 #define W_CHARGED_THREE_BRANCH_FRAME 110.f
 #define W_CHARGED_THREE_POST_SAMPLES 18u
+static inline unsigned w_round_spin_recovery(const WState *s,unsigned sample)
+{
+    return s->round_follow.exit_sample&&sample-s->round_follow.exit_sample<=18u;
+}
+static inline float w_charge_gesture_time(const WState *s)
+{
+    /* Keep the longer threshold for R already spent on the current move. */
+    return (s->consumed&ML_R)?.60f:W_SPIRIT_FULL_HOLD_SECONDS;
+}
+static inline unsigned w_native_three_recovery(const WState *s,unsigned sample)
+{
+    if(!s->wilds_native_three_sample)return 0;
+    unsigned age=sample-s->wilds_native_three_sample;
+    return age<=W_CHARGED_THREE_POST_SAMPLES||(age<=44&&s->wilds_native_three_held);
+}
 static inline unsigned w_charged_three_recovery(const WState *s,unsigned sample)
 {
     return s->wilds_three_exit_sample&&
@@ -224,6 +240,7 @@ WDecision w_debug_enter(WState *s,const WObservation *o,unsigned move);
 unsigned w_wilds_fade_action(const WObservation *o);
 WDecision w_wilds_round(WState *,const WObservation *);
 WDecision w_wilds_round_charge(WState *,const WObservation *);
+WDecision w_dividing_round(WState *s,const WObservation *o);
 WDecision w_dividing_spirit_attack(WState *s,const WObservation *o,unsigned keys);
 WDecision w_dividing_sheathe(WState *s,const WObservation *o);
 WDecision w_radiance_enter(WState *s,const WObservation *o,unsigned move);

@@ -1,8 +1,132 @@
-use forge::imgui::{color::color, draw::DrawList, font::ImFont, item};
-use forge::sys::imgui::{ImDrawFlags, ImVec2};
+extern crate alloc;
+
+use alloc::{ffi::CString, format};
+use core::sync::atomic::{AtomicI32, AtomicU32, Ordering::Relaxed};
+use forge::{
+    fs::{file_exists, savedata},
+    imgui::{color::color, draw::DrawList, font::ImFont, item, layout, slider, tree, widgets},
+    mt::{fs::{MtFile, OpenMode}, object::Object},
+    sys::imgui::{ImDrawFlags, ImGuiSliderFlags, ImGuiTreeNodeFlags, ImVec2},
+};
 
 const METAL: u32 = 0xff829bb7;
 const RECESS: u32 = 0xf5272019;
+
+// Coordinates are in the shared 640 × 360 HUD space. A single word keeps
+// a render snapshot consistent with the settings shown in the Forge panel.
+const DEFAULT_LAYOUT: u32 = pack(137, 46, 100);
+static PLACEMENT: AtomicU32 = AtomicU32::new(DEFAULT_LAYOUT);
+static SAVED: AtomicU32 = AtomicU32::new(DEFAULT_LAYOUT);
+static STORAGE: AtomicU32 = AtomicU32::new(0);
+static PREVIEW_FRAME: AtomicI32 = AtomicI32::new(i32::MIN);
+
+const fn pack(x: i32, y: i32, percent: i32) -> u32 {
+    x as u32 | (y as u32) << 10 | (percent as u32) << 19
+}
+
+fn unpack(word: u32) -> (i32, i32, i32) {
+    ((word & 1023) as i32, ((word >> 10) & 511) as i32, (word >> 19) as i32)
+}
+
+fn clamp_placement(word: u32) -> u32 {
+    let (x, y, percent) = unpack(word);
+    let percent = percent.clamp(50, 175);
+    let scale = 0.0082 * percent as f32;
+    let max_x = (638.0 - 144.0 * scale) as i32;
+    let max_y = (358.0 - 40.0 * scale) as i32;
+    pack(x.clamp(2, max_x), y.clamp(2, max_y), percent)
+}
+
+fn with_storage<T>(access: impl FnOnce(&CString) -> T) -> Option<T> {
+    if !savedata::mount() { return None; }
+    let path = CString::new(format!("{}:/lingyue_bracer.bin", savedata::mount_point()));
+    let result = path.ok().map(|path| access(&path));
+    savedata::unmount();
+    result
+}
+
+fn load_placement() {
+    if STORAGE.load(Relaxed) != 0 { return; }
+    let value = with_storage(|path| {
+        if !path.to_str().is_ok_and(file_exists) { return None; }
+        let file = MtFile::open(path, OpenMode::Read).ok()?;
+        let mut bytes = [0; 8];
+        let count = file.read(&mut bytes);
+        file.close();
+        file.destroy();
+        let [b0, b1, b2, b3, a, b, c, d] = bytes;
+        if count == 8 && [b0, b1, b2, b3] == *b"LYH1" {
+            Some(clamp_placement(u32::from_le_bytes([a, b, c, d])))
+        } else {
+            None
+        }
+    });
+    if let Some(value) = value {
+        if let Some(value) = value {
+            PLACEMENT.store(value, Relaxed);
+            SAVED.store(value, Relaxed);
+        }
+        STORAGE.store(1, Relaxed);
+    }
+}
+
+fn save_placement(word: u32) -> bool {
+    with_storage(|path| {
+        let Ok(file) = MtFile::open(path, OpenMode::Write) else { return false; };
+        let mut bytes = *b"LYH1\0\0\0\0";
+        bytes[4..].copy_from_slice(&word.to_le_bytes());
+        let written = file.write(&bytes);
+        file.close();
+        file.destroy();
+        written == bytes.len()
+    }).unwrap_or(false)
+}
+
+#[forge::imgui_render]
+fn settings() {
+    if !tree::collapsing_header(c"Lingyue - Boost bracer", ImGuiTreeNodeFlags::None) {
+        PREVIEW_FRAME.store(i32::MIN, Relaxed);
+        return;
+    }
+    load_placement();
+    PREVIEW_FRAME.store(item::get_frame_count(), Relaxed);
+    let (mut x, mut y, mut percent) = unpack(PLACEMENT.load(Relaxed));
+    let flags = ImGuiSliderFlags::AlwaysClamp;
+    slider::slider_int(c"Scale (%)", &mut percent, 50, 175, flags);
+    (x, y, percent) = unpack(clamp_placement(pack(x, y, percent)));
+    let (max_x, max_y, _) = unpack(clamp_placement(pack(640, 360, percent)));
+    slider::slider_int(c"Horizontal position", &mut x, 2, max_x, flags);
+    slider::slider_int(c"Vertical position", &mut y, 2, max_y, flags);
+    let mut value = clamp_placement(pack(x, y, percent));
+    let size = ImVec2::new(0.0, 0.0);
+    if widgets::button(c"Restore defaults", size) { value = DEFAULT_LAYOUT; }
+    layout::same_line(0.0, -1.0);
+    if widgets::button(c"Save bracer layout", size) {
+        if save_placement(value) {
+            SAVED.store(value, Relaxed);
+            STORAGE.store(1, Relaxed);
+        } else {
+            STORAGE.store(2, Relaxed);
+        }
+    }
+    PLACEMENT.store(value, Relaxed);
+    if STORAGE.load(Relaxed) == 2 {
+        widgets::text("Could not save the bracer layout.");
+    } else if value != SAVED.load(Relaxed) {
+        widgets::text("Layout changes are unsaved.");
+    }
+}
+
+pub fn render_state(state: u32) -> u32 {
+    let age = item::get_frame_count().wrapping_sub(PREVIEW_FRAME.load(Relaxed));
+    if (0..=1).contains(&age) { return if state != 0 { state } else { 1 | 2 | (72 << 8) | (240 << 16) }; }
+    if state != 0 && STORAGE.load(Relaxed) == 0 {
+        load_placement();
+        // Some runtimes do not expose a writable save mount.
+        if STORAGE.load(Relaxed) == 0 { STORAGE.store(1, Relaxed); }
+    }
+    state
+}
 
 fn border(dl: &DrawList, edge: &[ImVec2], tint: u32, width: f32) {
     for pair in edge.windows(2) {
@@ -43,8 +167,9 @@ pub fn draw(dl: &DrawList, left: f32, top: f32, scale: f32, state: u32) {
     let warning = active && fraction < 0.23;
     let phase = (item::get_time()*1.8) as f32;
     let wave = 1.0-(2.0*(phase-phase as u32 as f32)-1.0).abs();
-    let origin = ImVec2::new(left+137.0*scale,top+46.0*scale);
-    let scale = 0.82*scale;
+    let (x, y, percent) = unpack(PLACEMENT.load(Relaxed));
+    let origin = ImVec2::new(left+x as f32*scale,top+y as f32*scale);
+    let scale = 0.0082*percent as f32*scale;
     let point = |x: f32, y: f32| ImVec2::new(origin.x+x*scale,origin.y+y*scale);
     let core = point(26.0,22.0);
     let outline = [

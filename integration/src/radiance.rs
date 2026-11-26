@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use forge::imgui::{color::color, draw::DrawList};
 use forge::sys::imgui::ImVec2;
 
-static LAYERS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+static LAYERS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 
 #[unsafe(no_mangle)]
 extern "C" fn ml_radiance_screen(layer: u32, start: u32, end: u32, age: u32) {
@@ -85,26 +85,43 @@ pub fn draw(dl: &DrawList, size: ImVec2, scale: f32) {
                     lens(dl,ghost,axis,half*(1.0+age),width*scale,(255,108,98,strength(alpha*fade)));
                 }
             }
-            _ => {
-                let light = (0.79+0.21*smooth(age/0.032))*(1.0-smooth((age-0.051)/0.155));
-                let travel = 0.68 + 0.32*smooth(age/0.082);
-                let half = (span*1.06).clamp(36.0*scale,79.0*scale)*travel;
-                // Uneven lengths and angles follow one slash. Each ray shares
-                // the same root and fades to a point at the outer edge.
-                let rays = [(0.54,-0.84,0.77),(0.87,-0.49,0.94),(1.0,-0.08,1.0),
-                            (0.93,0.37,0.89),(0.66,0.75,0.69)];
-                for (cos,sin,reach) in rays {
-                    let ray = ImVec2::new(axis.x*cos-axis.y*sin, axis.x*sin+axis.y*cos);
-                    let length = half*reach;
-                    let origin = ImVec2::new(center.x+ray.x*length,center.y+ray.y*length);
-                    streak(dl,origin,ray,length,9.8*scale,-0.24,(240,35,47,strength(112.0*light)));
-                    streak(dl,origin,ray,length*0.98,5.0*scale,-0.24,(255,104,93,strength(161.0*light)));
-                    streak(dl,origin,ray,length*0.94,2.2*scale,-0.24,(255,238,218,strength(223.0*light)));
+            2 => {
+                let fade = 1.0-smooth((age-0.072)/0.108);
+                let light = (0.28+0.72*smooth(age/0.017))*fade;
+                let spread = smooth(age/0.035);
+                let slope = (0.34+0.07*axis.y*(if axis.x >= 0.0 {1.0} else {-1.0})).clamp(0.28,0.41);
+                let slash = ImVec2::new(-1.0,slope);
+                let root_x = center.x.clamp(0.28*size.x,0.75*size.x);
+                let right = 1.13*size.x;
+                let left = root_x+(-0.16*size.x-root_x)*spread;
+                let half = (right-left)*0.5;
+                let mid = right-half;
+                let origin = ImVec2::new(mid,center.y-(mid-root_x)*slope);
+                let width = (4.0+9.0*spread)*scale;
+                streak(dl,origin,slash,half,2.0*width,-0.14,(204,17,40,strength(89.0*light)));
+                streak(dl,origin,slash,half,1.47*width,-0.14,(245,39,59,strength(164.0*light)));
+                streak(dl,origin,slash,half,1.08*width,-0.14,(255,122,135,strength(222.0*light)));
+                streak(dl,origin,slash,half,0.84*width,-0.14,(255,246,239,strength(249.0*light)));
+                // The softer fan expands beneath the dominant white sheet.
+                for (tilt, reach) in [(0.19,0.36),(0.35,0.27),(0.52,0.19)] {
+                    let ray = ImVec2::new(1.0,-slope+tilt);
+                    let length = size.x*reach*(0.53+0.47*spread)*0.5;
+                    let start = ImVec2::new(root_x,center.y);
+                    let origin = ImVec2::new(start.x+ray.x*length,start.y+ray.y*length);
+                    lens(dl,origin,ray,length,9.0*scale,(233,75,72,strength(42.0*light)));
                 }
-                let root = light*(1.0-smooth(age/0.073));
-                lens(dl,center,axis,19.0*scale,13.0*scale,(255,90,70,strength(91.0*root)));
-                lens(dl,center,axis,12.0*scale,6.0*scale,(255,232,199,strength(145.0*root)));
             }
+            _ if end != 0 && span >= 4.0*scale => {
+                let gain = (state >> 48) as f32 / 255.0;
+                let length = span*0.54;
+                let mid = ImVec2::new((center.x+tip.x)*0.5,(center.y+tip.y)*0.5);
+                let flicker = (forge::imgui::item::get_time()*16.0) as f32;
+                let wave = (1.0-2.0*(flicker-flicker as u32 as f32)).abs();
+                streak(dl,mid,axis,length,8.5*scale,0.21,(234,69,35,strength(64.0*gain)));
+                streak(dl,mid,axis,length*0.97,(4.4+1.3*wave)*scale,0.21,(255,133,48,strength(104.0*gain)));
+                streak(dl,mid,axis,length*0.96,2.0*scale,0.21,(255,221,142,strength(125.0*gain)));
+            }
+            _ => {}
         }
     }
 }

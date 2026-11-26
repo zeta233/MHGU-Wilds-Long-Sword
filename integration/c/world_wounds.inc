@@ -256,6 +256,8 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
         ascendance_flash_target(actor,attack,target,status,region,point);
     }
     ascendance_hit(actor,attack,target,0,damage);
+    if(world.move==W_RELEASE&&ascendance.release_power==170&&ascendance_owned_blade(attack))
+        world_release_credit(target,status,damage,u16(attack,0x38));
     if(ascendance_owner(actor)&&ascendance_owned_blade(attack))
         ascendance_musou_mark(target,status,region,(const float *)point,damage);
 #endif

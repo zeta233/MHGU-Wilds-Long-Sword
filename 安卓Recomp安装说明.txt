@@ -1,6 +1,6 @@
-荒野太刀 · 凌越扩展 v0.283｜Android MHGU Recomp
+荒野太刀 · 凌越扩展 v0.296｜Android MHGU Recomp
 
-v0.283 安卓包已通过构建和附件校验。
+v0.296 安卓包已通过构建和附件校验。
 
 v0.271 安卓修复的实体机验证环境
 荣耀 Magic8 Pro，com.mhgu.xth 0.2.1，Forge 2.0.0，任务分辨率 2808×1256。
@@ -14,3 +14,9 @@ v0.271 安卓修复的实体机验证环境
 5. 如需互换 R／ZR，安装同版本 Android Recomp 可选补丁，按补丁说明替换或恢复插件。
 
 详细按键见同包《安装与按键说明.txt》。手柄集中模式为 ZL，操作类型 0 支持用方向键发动狩技。
+
+增幅护腕位置与大小
+
+打开 Forge，展开 Lingyue - Boost bracer。Windows Recomp 下默认按 Insert 打开 Forge，再展开 Plugin UI。三个滑块依次调整大小、横向位置、纵向位置。Save bracer layout 保存，Restore defaults 恢复默认后可再次保存。
+
+v0.293 包含追击二刀前景扇面和刀身余热光。屏幕径向模糊和刀身热浪折射由 Windows Recomp 后处理程序提供。

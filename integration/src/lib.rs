@@ -158,7 +158,7 @@ fn draw_gauge_glow() {
     let lock_hint = WILDS_LOCK_HINT.swap(0, Ordering::Relaxed);
     let wounds = core::array::from_fn::<_, 12, _>(|slot| WILDS_WOUNDS[slot].swap(0, Ordering::Relaxed));
     #[cfg(ml_ascendance_prototype)]
-    let boost = ASCENDANCE_GAUGE.swap(0, Ordering::Relaxed);
+    let boost = boost_hud::render_state(ASCENDANCE_GAUGE.swap(0, Ordering::Relaxed));
     #[cfg(not(ml_ascendance_prototype))]
     let boost = 0;
     let size = context::get_io().DisplaySize;

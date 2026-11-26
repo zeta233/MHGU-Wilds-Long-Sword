@@ -24,6 +24,9 @@ static struct {
     unsigned quest;
     unsigned radiance_entry_sample,radiance_entry_counter;
     unsigned dividing_exit_sample;
+    unsigned counter_sheathe;
+    float passive_frames;
+    unsigned helm_power,release_power;
 } ascendance;
 
 /* Pursuit follows the particular monster whose native reaction accepted
@@ -100,8 +103,9 @@ static void ascendance_rebind(void *a,unsigned quest,unsigned area,unsigned samp
 {
     unsigned charge=carry?ascendance.charge:0;
     float remaining=carry?ascendance.remaining:0;
+    float passive=carry?ascendance.passive_frames:0;
     ascendance=(__typeof__(ascendance)){
-        .actor=a,.quest=quest,.area=area,.sample=sample,.charge=charge,.remaining=remaining};
+        .actor=a,.quest=quest,.area=area,.sample=sample,.charge=charge,.remaining=remaining,.passive_frames=passive};
     musou=(__typeof__(musou)){0};
     radiance_pursuit=(__typeof__(radiance_pursuit)){0};
 #if ML_WILDS_MOVES
@@ -262,6 +266,11 @@ static void ascendance_hit(void *a,const void *attack,void *target,unsigned woun
     }
     if(damage&&world.move==W_BIG&&!musou.phase)
         log_event("ascendance_iai_damage",(u32)(uptr)a,world.source,damage,ascendance.enhanced_iai);
+    if(wound&&ascendance.remaining>0){
+        float before=ascendance.remaining;
+        ascendance.remaining=BOOST_DURATION;
+        log_event("ascendance_wound_refill",(u32)(uptr)a,(u32)(uptr)target,(u32)before,BOOST_DURATION);
+    }
     if((!wound&&!damage)||ascendance.charge==BOOST_CAPACITY)return;
     unsigned next=ascendance.charge+(wound?BOOST_WOUND:BOOST_HIT);
     ascendance.charge=next>BOOST_CAPACITY?BOOST_CAPACITY:next;
@@ -282,15 +291,27 @@ static float ascendance_attack_scale(void *attack)
         float bonus=musou.hits>=2?musou.hits*(musou.phase==MUSOU_DASH?.10f:.16f):0;
         return (1.05f+bonus)*musou_damage_multiplier;
     }
+    unsigned boost=ascendance.remaining>0;
     if(ascendance.enhanced_iai&&world.move==W_BIG&&world_attack_owned&&
        world_attack_actor==(u32)(uptr)a&&u16(attack,0x34)==world_attack_id)
-        return 1.6f;
-    return ascendance.remaining>0?1.05f:1.0f;
+        return boost?1.68f:1.6f;
+    if(world_attack_owned&&(world.move==W_RISE||world.move==W_AIR||world.move==W_DOWN||world.move==W_LAND)&&
+       ascendance.helm_power)return ascendance.helm_power*.01f;
+    if(world_attack_owned&&world.move==W_RELEASE&&ascendance.release_power)return ascendance.release_power*.01f;
+    unsigned round=u16(a,STATE)==16&&u16(a,ACTION)==30&&u16(a,MOTION)==0x500+127;
+    if(boost&&(round||(world_attack_owned&&(world.source==906||world.source==907||world.source==109||
+       world.source==917||world.source==W_CRIMSON_SPIN))))return 1.25f;
+    return boost?1.05f:1.0f;
 }
 
 static void ascendance_transition(void *a,const WDecision *d)
 {
     if(!ascendance_owner(a))return;
+    if(d->kind==W_ENTER&&d->move==W_THRUST)ascendance.helm_power=ascendance.remaining>0?170:120;
+    if(d->kind==W_ENTER&&d->move==W_RELEASE){
+        ascendance.release_power=ascendance.remaining>0?170:120;
+        log_event("ascendance_author_release",(u32)(uptr)a,ascendance.release_power,(u32)ascendance.remaining,0);
+    }
 #if ML_WILDS_MOVES
     red_musou=(__typeof__(red_musou)){0};
 #endif
@@ -316,11 +337,14 @@ static void ascendance_transition(void *a,const WDecision *d)
         radiance_pursuit.target=0;
     }
     unsigned enhanced_hold=d->kind==W_ENTER&&ascendance.sheathe&&!ascendance.radiance&&
-        ascendance.ready_frames<BOOST_SHEATHE_WINDOW&&ascendance.remaining>0;
+        ascendance.ready_frames<BOOST_SHEATHE_WINDOW&&(ascendance.remaining>0||ascendance.counter_sheathe);
     unsigned enhanced=enhanced_hold&&d->move==W_BIG;
     unsigned small=enhanced_hold&&d->move==W_SMALL&&d->source==307&&!d->motion_contract;
     ascendance.enhanced_iai=enhanced||small;
-    ascendance.sheathe=d->kind==W_ENTER&&d->move==W_SHEATHE&&!ascendance.radiance&&ascendance.remaining>0;
+    ascendance.counter_sheathe=d->kind==W_ENTER&&d->move==W_SHEATHE&&d->counter_resheathe;
+    ascendance.sheathe=d->kind==W_ENTER&&d->move==W_SHEATHE&&!ascendance.radiance&&
+        (ascendance.remaining>0||ascendance.counter_sheathe);
+    if(ascendance.counter_sheathe)log_event("ascendance_counter_sheathe",(u32)(uptr)a,0,0,0);
     ascendance.ready_frames=0;
     if(enhanced)log_event("ascendance_iai",(u32)(uptr)a,d->source,160,0);
 }
@@ -377,18 +401,24 @@ static void ascendance_sheathe_pose_tick(void *a,const WObservation *o)
 #endif
     log_event("ascendance_sheathe_pose",(u32)(uptr)a,previous,target,(u32)frame);
 }
-static unsigned ascendance_radiance_available(void *a)
+static unsigned ascendance_radiance_ready(void *a)
 {
     return ascendance_owner(a)&&!ascendance.radiance&&
         !musou.phase&&!ascendance.double_cut&&hunter_style(a)==0&&
         ascendance.charge>=BOOST_COST&&
-        (byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&(int16_t)u16(a,HP)>0;
+        !(word(a,AIR)&0x400)&&(int16_t)u16(a,HP)>0;
+}
+
+static unsigned ascendance_radiance_available(void *a)
+{
+    return ascendance_radiance_ready(a)&&(byte(a,DRAWN)&1);
 }
 
 static void ascendance_spend_reserve(void)
 {
     ascendance.charge-=BOOST_COST;
     ascendance.remaining=BOOST_DURATION;
+    ascendance.passive_frames=0;
 }
 
 static unsigned ascendance_independent_flash(void)
@@ -854,6 +884,12 @@ static WDecision ascendance_pursuit_run(void *a,WObservation *o,unsigned valid,f
     if(!valid||timed)radiance_pursuit.brake_cancel=1;
     if(valid&&!radiance_pursuit.brake_cancel){
         unsigned heading=ascendance_face(dx,dz,world.heading);
+        if(o->base.magnitude>=50){
+            int steer=ml_heading_delta(o->base.input_heading,heading)/3;
+            if(steer>4096)steer=4096;
+            if(steer< -4096)steer= -4096;
+            heading=(heading+steer)&65535u;
+        }
         int turn=ml_heading_delta(heading,world.heading),limit=(int)(1880*frames);
         if(turn>limit)turn=limit;
         if(turn< -limit)turn= -limit;
@@ -881,6 +917,7 @@ static WDecision ascendance_pursuit_run(void *a,WObservation *o,unsigned valid,f
                 WDecision d=w_radiance_enter(&world,o,W_SMALL);
                 if(d.kind==W_ENTER){
                     ascendance.radiance=RADIANCE_FOLLOW;
+                    if(o->has_focus_heading)world.heading=d.heading=o->focus_camera_heading;
                     world.slot=d.slot=PURSUIT_FIRST_SLOT;
                     d.motion_contract=1;d.blend=5;d.speed=1;
                     log_event("ascendance_follow",(u32)(uptr)a,(u32)(uptr)radiance_pursuit.target,d.heading,0);
@@ -996,7 +1033,7 @@ static WDecision ascendance_pursuit_command(void *a,WObservation *o,unsigned edg
             radiance_pursuit.age=0;
             /* Start every chase from rest so a cancelled one cannot leak speed. */
             radiance_pursuit.speed=0;
-            radiance_pursuit.buffered=(edge&PAD_X)&&o->base.held==ML_X;
+            radiance_pursuit.buffered=((edge&PAD_X)&&o->base.held==ML_X)||((edge&PAD_R)&&o->base.held==ML_R);
             world.heading=d.heading=ascendance_face(dx,dz,o->base.heading);
             log_event("ascendance_chase",(u32)(uptr)a,(u32)(uptr)radiance_pursuit.target,d.heading,0);
             log_event("ascendance_chase_dispatch",(u32)(uptr)a,(u32)(frame*1000.f),d.rank_delta,d.gauge_fill);
@@ -1029,7 +1066,7 @@ static WDecision ascendance_pursuit_command(void *a,WObservation *o,unsigned edg
     if(ascendance.radiance!=RADIANCE_CHASE||world.move!=W_THRUST)return (WDecision){0};
     if(!o->alive||!o->resources_ready||!o->drawn||o->state!=16||
        o->base.native_action!=w_action(W_THRUST))return (WDecision){0};
-    if((edge&PAD_X)&&o->base.held==ML_X)radiance_pursuit.buffered=1;
+    if(((edge&PAD_X)&&o->base.held==ML_X)||((edge&PAD_R)&&o->base.held==ML_R))radiance_pursuit.buffered=1;
     unsigned valid=o->grounded&&ascendance_pursuit_point(a,&dx,&dz);
     if(radiance_pursuit.independent){
         WDecision d=ascendance_pursuit_run(a,o,valid,dx,dz);
@@ -1895,6 +1932,24 @@ static WDecision ascendance_radiance_begin(void *a,const WObservation *o)
     return d;
 }
 
+static WDecision ascendance_flash_enter(void *a,const WObservation *o,unsigned stepping)
+{
+    WDecision d=w_radiance_enter(&world,o,W_BIG);
+    if(d.kind!=W_ENTER)return d;
+    if(stepping){d.motion_contract=1;d.blend=9;d.start=0;d.speed=1;}
+    if(ascendance_flash_resource(a)){
+        world.slot=d.slot=RADIANCE_FLASH_SLOT;
+        world.iai_focus_locked=1;
+        d.motion_contract=1;d.blend=stepping?8:6;d.start=0;d.speed=1;
+        ascendance.flash_travel=0;
+        log_event("ascendance_flash_step",(u32)(uptr)a,word(a,0x40),word(a,0x48),world.heading);
+    }
+    world.counter_success=ascendance.radiance_entry_counter;
+    ascendance.radiance_entry_counter=0;
+    ascendance.radiance=RADIANCE_RELEASE;
+    return d;
+}
+
 static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned raw,unsigned edge,unsigned start)
 {
     if(ascendance.musou_sheathe_r){
@@ -1979,6 +2034,17 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
     if(red.kind!=W_KEEP)return red;
 #endif
     unsigned keys=o->base.held;
+    if(start==2){
+        WDecision d=ascendance_flash_enter(a,o,0);
+        if(d.kind==W_ENTER){
+            unsigned reused=ascendance.remaining>0;
+            if(!reused)ascendance_spend_reserve();
+            ascendance.radiance_hit=ascendance.flash_r_buffered=ascendance.boost_toggle_pending=0;
+            radiance_pursuit=(__typeof__(radiance_pursuit)){0};
+            log_event("ascendance_charge_flash",(u32)(uptr)a,reused,ascendance.charge,(u32)ascendance.remaining);
+        }
+        return d;
+    }
     if(start)return ascendance_radiance_begin(a,o);
     if(ascendance.radiance!=RADIANCE_HOLD||!ascendance_owner(a)||world.move!=W_SHEATHE)
         return (WDecision){0};
@@ -2017,21 +2083,9 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
         ascendance.flash_step_release=0;
         unsigned stepping=world.slot==RADIANCE_WALK_SLOT;
         o->base.heading=world.heading;
-        WDecision d=w_radiance_enter(&world,o,W_BIG);
-        if(d.kind==W_ENTER){
-            if(stepping){d.motion_contract=1;d.blend=9;d.start=0;d.speed=1;}
-            if(ascendance_flash_resource(a)){
-                world.slot=d.slot=RADIANCE_FLASH_SLOT;
-                world.iai_focus_locked=1;
-                d.motion_contract=1;d.blend=stepping?8:6;d.start=0;d.speed=1;
-                ascendance.flash_travel=0;
-                log_event("ascendance_flash_step",(u32)(uptr)a,word(a,0x40),word(a,0x48),world.heading);
-            }
-            world.counter_success=ascendance.radiance_entry_counter;
-            ascendance.radiance_entry_counter=0;
-            ascendance.radiance=RADIANCE_RELEASE;
+        WDecision d=ascendance_flash_enter(a,o,stepping);
+        if(d.kind==W_ENTER)
             log_event("ascendance_flash",(u32)(uptr)a,keys,stamina>0?(unsigned)stamina:0,world.heading);
-        }
         return d;
     }
     world.hold_seconds=0;
@@ -2071,10 +2125,17 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
                 ascendance.remaining-=b->simulation_delta;
                 if(ascendance.remaining<=0){
                     ascendance.remaining=0;
-                    ascendance.sheathe=0;
+                    if(!ascendance.counter_sheathe)ascendance.sheathe=0;
                     log_event("ascendance_end",(u32)(uptr)a,0,0,0);
                 }
             }
+            if(ascendance.remaining<=0&&ascendance.charge<BOOST_CAPACITY){
+                ascendance.passive_frames+=b->simulation_delta;
+                if(ascendance.passive_frames>=60){
+                    ascendance.passive_frames-=60;
+                    ++ascendance.charge;
+                }
+            }else ascendance.passive_frames=0;
             if(ascendance.sheathe&&world.slot!=32&&w_iai_ready(&world,o)){
                 /* Keep the full opening frame available to the Iai input. */
                 if(ascendance.ready_frames==0)ascendance.ready_frames=.001f;
@@ -2110,8 +2171,12 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
         if(ascendance.boost_toggle_pending&&!(raw&PAD_BOOST)){
             ascendance.boost_toggle_pending=0;
             if(ascendance.remaining>0){
+                unsigned refund=(unsigned)(ascendance.remaining*BOOST_COST/BOOST_DURATION+.5f);
+                unsigned free=BOOST_CAPACITY-ascendance.charge;
+                if(refund>free)refund=free;
+                ascendance.charge+=refund;
                 ascendance.remaining=0;
-                log_event("ascendance_end",(u32)(uptr)a,1,0,0);
+                log_event("ascendance_end",(u32)(uptr)a,1,refund,ascendance.charge);
             }else if(ascendance.charge>=BOOST_COST){
                 ascendance_spend_reserve();
                 log_event("ascendance_start",(u32)(uptr)a,25,ordinary_sheathe,ordinary_sheathe?(u32)b->animation_frame:0);

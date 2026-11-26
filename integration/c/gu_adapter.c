@@ -685,11 +685,23 @@ static unsigned blend_blade_to_back(void *a,unsigned hand,float *pose,u32 *joint
     return 1;
 }
 
-static unsigned release_blade_seating(void *a,unsigned hand,float *pose,u32 *joint,u32 *closed)
+static unsigned release_blade_seating(void *a,void *blade,unsigned hand,float *pose,u32 *joint,u32 *closed)
 {
+    float frame=real(a,FRAME);
+    if(frame<W_RELEASE_SEAT_START)return 0;
+    const float *rest=0;
+    if(back_rest[0].owner==a&&back_rest[0].epoch==byte(a,AREA)&&
+       back_rest[0].model==(u32)(uptr)blade)rest=back_rest[0].pose;
     const void *scabbard=(const void *)(uptr)word(a,0x23a4);
-    if(!scabbard||word(scabbard,0x13cc)!=2)return 0;
-    return blend_blade_to_back(a,hand,pose,joint,closed,(const float *)((uptr)scabbard+0x40),
+    if(!rest&&scabbard&&word(scabbard,0x13cc)==2)
+        rest=(const float *)((uptr)scabbard+0x40);
+    if(!rest)return 0;
+    if(frame>=W_RELEASE_SHEATHE_FRAME){
+        for(unsigned i=0;i<12;++i)pose[i]=rest[i];
+        *joint=2;*closed=1;
+        return 1;
+    }
+    return blend_blade_to_back(a,hand,pose,joint,closed,rest,
                                W_RELEASE_SEAT_START,W_RELEASE_SEAT_ALIGN,W_RELEASE_SHEATHE_FRAME);
 }
 #endif
@@ -1032,11 +1044,12 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
     }
     float pose[12];u32 joint,closed;
     if((role!=9&&role!=10)||!local_supported(a))return original_placement(object,owner,native_role,flags);
-    unsigned motion=u16(a,MOTION),private_pose=0,round_seat=0,round_scabbard=0;
+    unsigned motion=u16(a,MOTION),private_pose=0,round_seat=0,round_scabbard=0,release_seat=0;
 #if ML_WILDS_MOVES
     unsigned charged_round=role==9&&motion==0x500+219;
     round_seat=charged_round&&real(a,FRAME)>=W_ROUND_SHEATHE_FRAME;
     round_scabbard=role==10&&motion==0x500+219;
+    release_seat=role==9&&motion==0x500+250&&real(a,FRAME)>=W_RELEASE_SHEATHE_FRAME;
     if(ported_round_motion(motion)){
         *(uint16_t *)((uptr)a+MOTION)=0x500+127;
         u32 result=original_placement(object,owner,native_role,flags);
@@ -1050,10 +1063,10 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
     unsigned enhanced_sheathe=motion==0x500+ENHANCED_SHEATHE_SLOT;
     if(enhanced_sheathe)*(uint16_t *)((uptr)a+MOTION)=0x500+RADIANCE_HOLD_SLOT;
 #endif
-    /* The round's sheathed tail settles into the model's own idle mount. */
-    if(round_seat)*(uint16_t *)((uptr)a+MOTION)=1;
+    /* The sheathed tails use the model's native stowed placement. */
+    if(round_seat||release_seat)*(uint16_t *)((uptr)a+MOTION)=1;
     u32 result=original_placement(object,owner,native_role,flags);
-    if(round_seat)*(uint16_t *)((uptr)a+MOTION)=(uint16_t)motion;
+    if(round_seat||release_seat)*(uint16_t *)((uptr)a+MOTION)=(uint16_t)motion;
 #if ML_ASCENDANCE_PROTOTYPE
     if(enhanced_sheathe)*(uint16_t *)((uptr)a+MOTION)=(uint16_t)motion;
 #endif
@@ -1126,7 +1139,7 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
     }
     if(role==9&&motion==0x500+250){
         if(posed&&joint==12&&!closed)release_wrist_pose(a,pose);
-        if(release_blade_seating(a,posed,pose,&joint,&closed))posed=1;
+        if(release_blade_seating(a,object,posed,pose,&joint,&closed))posed=1;
     }
 #endif
 #if ML_ASCENDANCE_PROTOTYPE

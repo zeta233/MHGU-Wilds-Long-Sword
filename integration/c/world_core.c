@@ -349,7 +349,7 @@ WDecision w_leave(WState *s)
 {
     WDecision d={0};
     s->foresight_press.motion=0;
-    s->round_follow.motion=0;
+    s->round_follow=(__typeof__(s->round_follow)){0};
     if(s->move==W_GROUND&&s->ground_node==5&&s->hit_success&&!s->rank_paid){
         spirit_round_reward(&d,s->rank);
     }
@@ -360,8 +360,9 @@ WDecision w_leave(WState *s)
 #endif
     if(s->helm_cost_pending&&s->rank)d.rank_delta-=1;
     s->helm_cost_pending=0;s->valor_release=0;s->red_foresight_chain=0;s->wilds_charge_link=0;
-    s->valor_foresight_r=0;
+    s->valor_foresight_r=s->foresight_focus=0;
     s->wilds_three_exit_r=s->wilds_three_exit_sample=0;
+    s->wilds_native_three_sample=0;
     s->wilds_slide_exit_sample=s->wilds_slide_exit_r=s->wilds_native_r_spent=0;
     s->spirit_crimson_pending=s->spirit_crimson_repeat=0;
     s->wilds_charge_carry=0;s->wilds_charge_carry_source=s->wilds_charge_carry_action=0;
@@ -420,6 +421,7 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
 #if ML_WILDS_MOVES
     if(move==W_FORESIGHT&&o->rank==3)s->source=918;
     s->valor_foresight=o->valor&&s->source==918;
+    s->foresight_focus=s->source==918&&o->focus_active;
     unsigned crimson_heading=0;
     if(move==W_CHIJIN)s->source=crimson_one(o,&crimson_heading,&d.crimson_direction);
 #endif
@@ -432,7 +434,7 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
     }
     s->wilds_tier=1;s->wilds_elapsed=s->wilds_buffer=s->wilds_roll_buffer=s->wilds_r_wait=0;s->wilds_r_pending=0;
     s->wilds_thrust_buffer=0;
-    s->wilds_red_three_held=0;
+    s->wilds_native_three_held=0;
     s->wilds_gauge_fraction=0;s->wilds_bridge_hold=0;
     s->wilds_previous=o->base.held;s->wilds_sample=o->base.sample_sequence;
     s->slot=w_clip(s->source)->slot;s->bound=0;s->last_frame=0;
@@ -712,6 +714,7 @@ WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsig
         wilds_spirit_direction(s,&o->base);
         return wilds_valor_spirit_one(s,o);
     }
+    if(charge)return wilds_charge(s,o,1);
     if(o->base.magnitude>=50){
         if(moving_two&&spirit_available(o,15)){
             wilds_spirit_direction(s,&o->base);
@@ -721,7 +724,6 @@ WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsig
         if(d.kind!=W_KEEP)return d;
         return wilds_directional_weak_spirit(s,o);
     }
-    if(charge&&spirit_available(o,15))return wilds_charge(s,o,1);
     return wilds_native(s,o,spirit_available(o,15)?16:17);
 }
 #endif

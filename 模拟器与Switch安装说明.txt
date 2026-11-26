@@ -1,4 +1,4 @@
-荒野太刀 · 凌越扩展 v0.283 兼容测试版
+荒野太刀 · 凌越扩展 v0.296 兼容测试版
 
 适用游戏是《Monster Hunter Generations Ultimate》1.4.0，Title ID 0100770008DD8000。请先准备已能在该环境加载插件的 MHGU Forge 1.5.1，并留一套有效的 Forge 前置。
 
@@ -8,7 +8,7 @@ Eden 模拟器
 2. 将旧 Wilds-LS-World 移出模组目录备份，再放入测试包内的整个 Wilds-LS-World 文件夹。
 3. 启动游戏并在模拟器日志中检查 Forge 是否初始化了 mhw_ls_rebuild.nro。Eden 0.2.1 测试用的硬件兼容 Forge 构建为 1.5.1-gbbc540f。若 Eden 在系统键盘处停住，可将该游戏的 Software Keyboard Applet 设为 LLE 后重启。
 
-v0.283 已完成 Eden 构建和附件校验。Eden 0.2.1 曾在公会太刀训练任务验证掌机与主机模式切换。增幅护腕、集中准星和 R3 提示会按当前游戏画面定位。
+v0.296 已完成 Eden 构建和附件校验。Eden 0.2.1 曾在公会太刀训练任务验证掌机与主机模式切换。增幅护腕、集中准星和 R3 提示会按当前游戏画面定位。
 
 Switch 实体机
 
@@ -21,3 +21,9 @@ v0.275 修复 Forge 受击和伤害显示钩子与太刀的共载问题。已装
 若装过旧太刀的 mhgu_r_bridge.nro，请退出游戏后将该文件移出 nativeNX/plugins 并备份。旧桥接会在部分太刀动作中把物理 R 同时送成 R 和 ZR，导致连段漏输入。本模组的 R／ZR 互换由自己的可选插件提供。
 
 按键见《安装与按键说明.txt》。需要互换 R／ZR 时，请选择对应平台的同版本可选补丁。模拟器和 Switch 构建沿用 Forge 绘制护腕、提示与前景特效。Vulkan 屏幕径向模糊、折射以及超宽界面锚点接口由 Windows Recomp 后处理程序提供。
+
+增幅护腕位置与大小
+
+打开 Forge，展开 Lingyue - Boost bracer。Windows Recomp 下默认按 Insert 打开 Forge，再展开 Plugin UI。三个滑块依次调整大小、横向位置、纵向位置。Save bracer layout 保存，Restore defaults 恢复默认后可再次保存。
+
+v0.293 包含追击二刀前景扇面和刀身余热光。屏幕径向模糊和刀身热浪折射由 Windows Recomp 后处理程序提供。

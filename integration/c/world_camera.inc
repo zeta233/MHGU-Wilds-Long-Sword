@@ -11,6 +11,44 @@ static unsigned world_camera_sample,world_camera_active,world_camera_object;
 static unsigned world_camera_origin[2];
 static int world_camera_delta[2];
 static float world_camera_age,world_camera_duration;
+#if ML_WILDS_MOVES
+enum { WORLD_FOCUS_CAMERA_TAIL_SAMPLES=36 };
+static unsigned world_camera_iai_sample,world_camera_focus;
+static struct {
+    void *actor;
+    unsigned area,sample,round,focus;
+} world_camera_foresight;
+static unsigned world_camera_iai_recent(void *a)
+{
+    return world_camera_actor==(u32)(uptr)a&&world_camera_epoch==byte(a,AREA)&&
+        world_camera_iai_sample&&sample_sequence-world_camera_iai_sample<=WORLD_FOCUS_CAMERA_TAIL_SAMPLES;
+}
+static unsigned world_camera_foresight_recent(void *a)
+{
+    return world_camera_foresight.actor==a&&world_camera_foresight.area==byte(a,AREA)&&
+        sample_sequence-world_camera_foresight.sample<=WORLD_FOCUS_CAMERA_TAIL_SAMPLES;
+}
+
+static void world_camera_track_foresight(void *a,unsigned focus)
+{
+    unsigned area=byte(a,AREA);
+    unsigned recent=world_camera_foresight_recent(a);
+    if(world.actor==(u32)(uptr)a&&world.epoch==area&&u16(a,STATE)==16&&
+       u16(a,ACTION)==w_action(world.move)&&u16(a,MOTION)==0x500+world.slot){
+        if(world.move==W_FORESIGHT){
+            if(!recent||world_camera_foresight.round)
+                world_camera_foresight=(__typeof__(world_camera_foresight)){.actor=a,.area=area};
+            world_camera_foresight.sample=sample_sequence;
+        }else if((world.source==109||world.source==917)&&(recent||world.red_foresight_chain)){
+            if(!recent)
+                world_camera_foresight=(__typeof__(world_camera_foresight)){.actor=a,.area=area};
+            world_camera_foresight.sample=sample_sequence;
+            world_camera_foresight.round=1;
+        }
+    }
+    if(focus&&world_camera_foresight_recent(a))world_camera_foresight.focus=1;
+}
+#endif
 #if !ML_SWITCH_GUARD_DIAGNOSTICS
 static u32 (*world_original_view)(void *,void *);
 static void *world_player_view_camera;
@@ -18,7 +56,84 @@ static struct {
     void *camera,*actor;
     unsigned area,source;
     float distance_squared;
+#if ML_WILDS_MOVES
+    unsigned focus_sample,focus_held,focus_chain_sample;
+    float focus_limit,rendered_distance;
+#endif
+#if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE && ML_WORLD_PRESENTATION
+    unsigned framing_sample,pursuit_target,musou_target;
+    float pursuit_amount,pursuit_from,pursuit_frames;
+    float musou_framing[2];
+#endif
 } world_view_baseline;
+
+#if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE && ML_WORLD_PRESENTATION
+static float world_view_bound(float x,float limit)
+{
+    return x>limit?limit:x< -limit?-limit:x;
+}
+
+static unsigned world_view_framing(void *a,const float delta[3],float radius,float shift[3])
+{
+    unsigned focus=(ml_pad_raw_bits()&PAD_FOCUS)!=0;
+    // A dispatch can change the route one frame before the motion layer
+    // binds its replacement clip. Track the owned action across that handoff.
+    unsigned owned=!focus&&ascendance_owner(a)&&world.actor==(u32)(uptr)a&&
+        u16(a,STATE)==16&&u16(a,ACTION)==w_action(world.move);
+    unsigned pursuit=owned&&((ascendance.radiance==RADIANCE_CHASE&&world.move==W_THRUST)||
+        (ascendance.radiance==RADIANCE_FOLLOW&&world.move==W_SMALL));
+    unsigned dash=owned&&((musou.phase==MUSOU_DASH&&world.move==W_BIG)||
+        (musou.phase==MUSOU_CUT&&world.move==W_SMALL&&world.slot==40));
+    float horizontal=att_sqrt(delta[0]*delta[0]+delta[2]*delta[2]);
+    if(!(radius>0&&horizontal>0))return 0;
+    if(world_view_baseline.framing_sample!=sample_sequence){
+        world_view_baseline.framing_sample=sample_sequence;
+        float frames=real(a,0x1c);
+        if(!(frames>0))frames=0;
+        if(frames>4)frames=4;
+        if(pursuit!=world_view_baseline.pursuit_target){
+            world_view_baseline.pursuit_target=pursuit;
+            world_view_baseline.pursuit_from=world_view_baseline.pursuit_amount;
+            world_view_baseline.pursuit_frames=0;
+            log_event("world_view_pursuit",(u32)(uptr)a,pursuit,world.slot,(u32)radius);
+        }
+        float duration=pursuit?39.f:9.6f;
+        if(world_view_baseline.pursuit_frames<duration)world_view_baseline.pursuit_frames+=frames;
+        float t=world_view_baseline.pursuit_frames/duration;
+        if(t>1)t=1;
+        float blend=t*t*(3-2*t);
+        float from=world_view_baseline.pursuit_from;
+        world_view_baseline.pursuit_amount=from+(pursuit-from)*blend;
+
+        // Frame part of the dash back toward its starting point, with enough
+        // room for the hunter even when the camera is already against a wall.
+        if(dash!=world_view_baseline.musou_target){
+            world_view_baseline.musou_target=dash;
+            log_event("world_view_musou",(u32)(uptr)a,dash,world.slot,(u32)radius);
+        }
+        float dx=dash?(musou.start_x-real(a,0x40))*.5f:0;
+        float dz=dash?(musou.start_z-real(a,0x48))*.5f:0;
+        float side=(dx*delta[2]-dz*delta[0])/horizontal;
+        float forward=(dx*delta[0]+dz*delta[2])/horizontal;
+        world_view_baseline.musou_framing[0]+=
+            (world_view_bound(side,110.f)-world_view_baseline.musou_framing[0])*frames/(dash?4.f:12.f);
+        world_view_baseline.musou_framing[1]+=
+            (world_view_bound(forward,65.f)-world_view_baseline.musou_framing[1])*frames/(dash?4.f:12.f);
+        if(!dash)for(unsigned i=0;i<2;++i)
+            if(world_view_baseline.musou_framing[i]<.05f&&world_view_baseline.musou_framing[i]>-.05f)
+                world_view_baseline.musou_framing[i]=0;
+    }
+    // Adjust the view target only. The native eye, collision and orbit
+    // angles remain untouched, including at the edges of an area.
+    float amount=world_view_baseline.pursuit_amount;
+    float side=world_view_bound(world_view_baseline.musou_framing[0]-55.f*amount,radius*.13f);
+    float forward=world_view_bound(world_view_baseline.musou_framing[1],radius*.08f);
+    shift[0]=(side*delta[2]+forward*delta[0])/horizontal;
+    shift[1]=(radius*.12f<58.f?radius*.12f:58.f)*amount;
+    shift[2]=(forward*delta[2]-side*delta[0])/horizontal;
+    return side!=0||forward!=0||amount!=0;
+}
+#endif
 
 static u32 world_view(void *out,void *camera)
 {
@@ -29,32 +144,87 @@ static u32 world_view(void *out,void *camera)
     unsigned steady=world.actor==(u32)(uptr)a&&world.epoch==area&&u16(a,STATE)==16&&
         u16(a,ACTION)==w_action(world.move)&&
         (world.move==W_FORESIGHT||(world.move==W_SMALL&&world.slot==238));
-    float eye[3],delta[3],distance=0;
+    float eye[3],look[3],delta[3],distance=0;
     for(unsigned k=0;k<3;++k){
         eye[k]=real(camera,0x40+4*k);
-        delta[k]=eye[k]-real(camera,0x60+4*k);
+        look[k]=real(camera,0x60+4*k);
+        delta[k]=eye[k]-look[k];
         distance+=delta[k]*delta[k];
     }
     if(world_view_baseline.camera!=camera||world_view_baseline.actor!=a||world_view_baseline.area!=area)
         world_view_baseline=(__typeof__(world_view_baseline)){.camera=camera,.actor=a,.area=area};
+    float limit=world_view_baseline.distance_squared;
     if(!steady){
         world_view_baseline.source=0;
         if(distance>0)world_view_baseline.distance_squared=distance;
-        return world_original_view(out,camera);
+        limit=distance;
     }
-    float limit=world_view_baseline.distance_squared;
-    if(!(limit>0&&distance>limit))return world_original_view(out,camera);
-    float ratio=att_sqrt(limit/distance);
-    if(world_view_baseline.source!=world.source){
+    if(!(limit>0))limit=distance;
+#if ML_WILDS_MOVES
+    if(distance>0){
+        float radius=att_sqrt(distance);
+        unsigned iai=world_camera_iai_recent(a);
+        unsigned round=world_camera_foresight.round&&world_camera_foresight_recent(a);
+        unsigned raw_focus=(ml_pad_raw_bits()&PAD_FOCUS)!=0;
+        if(raw_focus){
+            unsigned state=u16(a,STATE),action=u16(a,ACTION);
+            unsigned owned=world.actor==(u32)(uptr)a&&world.epoch==area&&
+                state==16&&action==w_action(world.move);
+            if((owned&&(world.move==W_CHIJIN||world.move==W_FORESIGHT||world.move==W_SLIDE))||
+               (!world.move&&w_native_spirit_one(state,action)))
+                world_view_baseline.focus_chain_sample=sample_sequence;
+        }
+        unsigned chain=raw_focus&&world_view_baseline.focus_chain_sample&&
+            sample_sequence-world_view_baseline.focus_chain_sample<=WORLD_FOCUS_CAMERA_TAIL_SAMPLES;
+        unsigned focus=chain||(iai&&(world_camera_focus||raw_focus))||
+            (round&&(world_camera_foresight.focus||raw_focus));
+        unsigned fresh=world_view_baseline.focus_sample!=sample_sequence;
+        if(fresh)world_view_baseline.focus_sample=sample_sequence;
+        if(focus&&!world_view_baseline.focus_held){
+            float previous=world_view_baseline.rendered_distance;
+            world_view_baseline.focus_limit=previous>0?previous:radius;
+        }
+        world_view_baseline.focus_held=focus;
+        float cap=world_view_baseline.focus_limit;
+        if(cap>0){
+            /* Native obstruction can move the eye closer. Suppress repeated
+             * outward corrections during the handoff, then ease them back. */
+            if(radius<cap)cap=radius;
+            else if(!focus&&fresh){
+                float frames=real(a,0x1c);
+                if(frames>0)cap+=(radius-cap)*(frames<12?frames/12:1);
+            }
+            world_view_baseline.focus_limit=!focus&&radius-cap<.5f?0:cap;
+            if(cap*cap<limit)limit=cap*cap;
+            if(fresh)log_event(chain?"world_focus_chain_distance":round?"world_focus_round_distance":"world_focus_iai_distance",(u32)(uptr)a,focus,
+                (u32)(radius*10),(u32)(att_sqrt(limit)*10));
+        }
+        world_view_baseline.rendered_distance=att_sqrt(limit<distance?limit:distance);
+    }
+#endif
+    unsigned clamp_eye=limit>0&&distance>limit;
+    float shift[3]={0,0,0};
+    unsigned frame_action=0;
+#if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE && ML_WORLD_PRESENTATION
+    frame_action=world_view_framing(a,delta,att_sqrt(clamp_eye?limit:distance),shift);
+#endif
+    if(!clamp_eye&&!frame_action)return world_original_view(out,camera);
+    float ratio=clamp_eye?att_sqrt(limit/distance):1;
+    if(clamp_eye&&steady&&world_view_baseline.source!=world.source){
         world_view_baseline.source=world.source;
         log_event("world_steady_view",(u32)(uptr)a,world.source,(u32)att_sqrt(distance),(u32)att_sqrt(limit));
     }
-    /* The view matrix alone uses the clamped eye. Keep the native camera's
+    /* Only the render matrix uses these offsets. Keep the native camera's
      * obstacle and aim state for the next update. */
-    for(unsigned k=0;k<3;++k)
-        set_real(camera,0x40+4*k,real(camera,0x60+4*k)+delta[k]*ratio);
+    for(unsigned k=0;k<3;++k){
+        if(clamp_eye)set_real(camera,0x40+4*k,look[k]+delta[k]*ratio);
+        if(frame_action)set_real(camera,0x60+4*k,look[k]+shift[k]);
+    }
     u32 result=world_original_view(out,camera);
-    for(unsigned k=0;k<3;++k)set_real(camera,0x40+4*k,eye[k]);
+    for(unsigned k=0;k<3;++k){
+        if(clamp_eye)set_real(camera,0x40+4*k,eye[k]);
+        if(frame_action)set_real(camera,0x60+4*k,look[k]);
+    }
     return result;
 }
 #endif
@@ -124,6 +294,7 @@ static void world_camera_reserve_focus(void *a)
      * replay a key or resume a tween that Focus already canceled. */
     world_camera_seen=3;
     world_camera_active=0;
+    world_camera_focus=1;
 }
 #endif
 static void world_camera_begin(void *a)
@@ -131,6 +302,8 @@ static void world_camera_begin(void *a)
     world_camera_actor=(u32)(uptr)a;world_camera_epoch=byte(a,AREA);
     world_camera_seen=world_camera_active=0;
 #if ML_WILDS_MOVES
+    world_camera_focus=0;
+    world_camera_iai_sample=sample_sequence;
     if(ml_pad_raw_bits()&PAD_FOCUS)world_camera_reserve_focus(a);
 #endif
 }
@@ -158,12 +331,17 @@ static unsigned world_camera_target(void *a,unsigned *yaw)
 static void world_camera(void *camera)
 {
     void *a=(void *)(uptr)word(camera,0x85c);
+    unsigned local=local_supported(a),alive=local&&(int16_t)u16(a,HP)>0;
+#if ML_WILDS_MOVES
+    unsigned focus=alive?ml_pad_raw_bits()&PAD_FOCUS:0;
+    if(alive)world_camera_track_foresight(a,focus);
+    else if(world_camera_foresight.actor==a)world_camera_foresight.actor=0;
+#endif
 #if !ML_SWITCH_GUARD_DIAGNOSTICS
-    if(local_supported(a))world_player_view_camera=camera;
+    if(local)world_player_view_camera=camera;
     else if(world_player_view_camera==camera)world_player_view_camera=0;
 #endif
-    unsigned valid=local_supported(a)&&world_camera_actor==(u32)(uptr)a&&
-        world_camera_epoch==byte(a,AREA)&&(int16_t)u16(a,HP)>0;
+    unsigned valid=alive&&world_camera_actor==(u32)(uptr)a&&world_camera_epoch==byte(a,AREA);
     if(!valid)world_camera_active=0;
     else {
         if(world_camera_object!=(u32)(uptr)camera){
@@ -171,7 +349,10 @@ static void world_camera(void *camera)
             log_event("world_camera_owner",(u32)(uptr)a,(u32)(uptr)camera,word(camera,0x9e0),word(camera,0x9e4));
         }
 #if ML_WILDS_MOVES
-        if((world.move==W_BIG||world_camera_active)&&(ml_pad_raw_bits()&PAD_FOCUS))
+        if(world.move==W_BIG&&world.source>=308&&world.source<=311&&
+           u16(a,STATE)==16&&u16(a,ACTION)==w_action(W_BIG))
+            world_camera_iai_sample=sample_sequence;
+        if((world_camera_iai_recent(a)||world_camera_active)&&focus)
             world_camera_reserve_focus(a);
 #endif
         unsigned fresh=world_camera_sample!=sample_sequence;float step=0;
@@ -217,7 +398,7 @@ static void world_camera(void *camera)
     /* Keep GU's floor/obstruction constraints and eye-position calculation. */
     world_original_camera(camera);
 #if ML_WILDS_MOVES
-    if(local_supported(a)){
+    if(local){
         focus_camera_actor=(u32)(uptr)a;focus_camera_epoch=byte(a,AREA);
         focus_camera_yaw=(word(camera,0x9dc)+32768u)&65535u;
 #if !ML_SWITCH_NO_OVERLAY

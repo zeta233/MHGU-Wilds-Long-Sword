@@ -180,6 +180,13 @@ WDecision w_foresight_press(WState *s,const WObservation *o)
                 unsigned cancel=s->source==W_CRIMSON_RETREAT?40u:clip->cancel;
                 stage=frame>=cancel?3:frame+18>=cancel?1:0;
             }
+        }else if(s->move==W_CHARGE&&!o->valor&&b->native_action==w_action(W_CHARGE)&&b->motion==0x500+s->slot){
+            if(s->source==908)stage=frame>=20?3:1;
+            else if(s->source==909||s->source==915)stage=3;
+            else if(s->source==902||s->source==917){
+                unsigned cancel=wilds_clip(s->source)->cancel;
+                stage=frame>=cancel?3:frame+18>=cancel?1:0;
+            }
         }else if(!s->move&&!o->valor){
             unsigned source=w_guild_source(o->state,b->native_action,b->motion);
             if(world_source_node(source)!=0xffff||source==149||source==154)
@@ -230,10 +237,10 @@ static WDecision wilds_iai_follow(WState *s,const WObservation *o)
         /* The opener consumes R for single-button commands, but a sustained
          * physical hold is an explicit charge gesture. A fresh R in recovery
          * needs only the tap discrimination interval. */
-        float threshold=(s->consumed&ML_R)?.60f:.25f;
+        float threshold=w_charge_gesture_time(s);
         if(frame>=37&&b->held==ML_R){
             s->wilds_charge_link=2;
-            if(s->wilds_bridge_hold>=threshold)return wilds_charge(s,o,2);
+            if(s->wilds_bridge_hold+1.e-5f>=threshold)return wilds_charge(s,o,2);
         }
         return (WDecision){0};
     }
@@ -260,17 +267,23 @@ static WDecision wilds_iai_follow(WState *s,const WObservation *o)
         next.rank=o->rank+1;if(next.rank==3)next.base.gauge=100;
     }
     if(s->iai_follow_keys==thrust)return enter(s,&next,W_THRUST,thrust);
-    if(s->iai_follow_keys==sheathe)return enter(s,&next,W_SHEATHE,sheathe);
+    if(s->iai_follow_keys==sheathe){
+        WDecision d=enter(s,&next,W_SHEATHE,sheathe);
+        d.counter_resheathe=d.kind==W_ENTER&&!o->valor_style;
+        return d;
+    }
     if(frame>=70&&b->held==ML_R){
         s->wilds_charge_link=3;
-        if(s->wilds_bridge_hold>=.60f)return wilds_charge(s,&next,3);
+        float threshold=w_charge_gesture_time(s);
+        if(s->wilds_bridge_hold+1.e-5f>=threshold)return wilds_charge(s,&next,3);
     }
     if(next.rank==3&&!(keys&~ML_X)&&
        (s->iai_follow_keys==ML_X?s->iai_follow_wait<=0:held==ML_X))
         return w_wilds_enter(s,&next,W_CHIJIN);
     if(s->iai_follow_keys==ML_R&&s->iai_follow_wait<=0){
         if(held==ML_R){
-            if(frame>=70&&s->iai_follow_wait<=-.50f)return wilds_charge(s,&next,3);
+            float after_confirm=w_charge_gesture_time(s)-.10f;
+            if(frame>=70&&s->iai_follow_wait<=-after_confirm)return wilds_charge(s,&next,3);
             return (WDecision){0};
         }
         return wilds_native(s,&next,spirit_available(&next,20)?26:27);
@@ -323,6 +336,7 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
     if(foresight.kind!=W_KEEP)return foresight;
     WDecision spin=wilds_round_spin(s,o);
     if(spin.kind!=W_KEEP)return spin;
+    if(w_round_spin_recovery(s,b->sample_sequence)&&b->held==ML_R)return (WDecision){0};
     /* Native recovery owns the cancel window. Capture X before GU can
      * queue a regular thrust or mistake the tail of Spirit I's R for a chord. */
     unsigned spirit_one=!s->move&&w_spirit_one_crimson_source(o->state,b->native_action,b->motion);
@@ -406,8 +420,10 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
         bridge_source=1;
     WDecision bridge=wilds_bridge(s,o,bridge_source);
     if(bridge.kind!=W_KEEP)return bridge;
+    if(s->wilds_direction_pending)return (WDecision){0};
+    if(s->wilds_native_three_sample&&s->wilds_native_three_held&&b->held==ML_R)return (WDecision){0};
     if(s->wilds_r_pending&&b->held==ML_R&&
-       ((s->move==W_SMALL)||(!s->move&&(bridge_source==112||w_ordinary_charge_source(bridge_source))&&b->magnitude<50)))return (WDecision){0};
+       (s->move==W_SMALL||(!s->move&&(bridge_source==112||w_ordinary_charge_source(bridge_source)))))return (WDecision){0};
     if(s->wilds_three_exit_sample&&s->wilds_three_exit_r==902&&b->held==ML_R)return (WDecision){0};
     if(s->wilds_slide_exit_r&&b->held==ML_R)return (WDecision){0};
 #endif
