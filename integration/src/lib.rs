@@ -1,13 +1,35 @@
 //! Clean host shim: no legacy controller, private motion data or hit rewrites.
 #![no_std]
-#[cfg(all(ml_ascendance_prototype, ml_world_presentation))]
+#[cfg(all(ml_ascendance_prototype, ml_world_presentation, not(ml_switch_no_overlay)))]
 mod radiance;
-#[cfg(ml_ascendance_prototype)]
+#[cfg(all(ml_ascendance_prototype, not(ml_switch_no_overlay)))]
 mod boost_hud;
 use core::sync::atomic::{AtomicU32,AtomicU64,Ordering};
 use forge::log::prelude::*;
 static BASE:AtomicU32=AtomicU32::new(0);
 unsafe extern "C" {fn ml_install(base:u32)->u32;fn ml_pad_refresh();}
+#[unsafe(no_mangle)]
+extern "C" fn ml_startup_guard(offset:u32, observed:u32, expected:u32) {
+    error!("[ml-rebuild] startup guard at main+{offset:#010x}: found {observed:#010x}, expected {expected:#010x}");
+}
+#[cfg(ml_switch_viewport)]
+#[unsafe(no_mangle)]
+extern "C" fn ml_shared_damage_hook(offset:u32) {
+    info!("[ml-rebuild] retaining existing Forge damage hook at main+{offset:#010x}");
+}
+#[cfg(ml_switch_guard_diagnostics)]
+#[unsafe(no_mangle)]
+extern "C" fn ml_switch_guard_stage(stage: u32, action: u32, source: u32, detail: u32) {
+    let label = match stage {
+        0 => "request begin", 1 => "request end",
+        2 => "reset begin", 3 => "layer begin", 4 => "layer end",
+        5 => "physics end", 6 => "detector end",
+        7 => "sound begin", 8 => "sound end",
+        9 => "effect begin", 10 => "effect end",
+        _ => "unknown",
+    };
+    info!("[ml-rebuild] Switch guard: {label}; move={action} source={source} detail={detail:#x}");
+}
 #[cfg(ml_swap_r_zr)]
 unsafe extern "C" {fn ml_shoulder_swap_installed()->u32;}
 
@@ -36,6 +58,12 @@ fn main(){
     info!("[ml-rebuild] build=attachment-preview-1 scope=attachment_probe combat_ready=0");
     let installed=unsafe{ml_install(base)};
     if installed==0 {error!("[ml-rebuild] native guards rejected; controller remains inactive");return;}
+    #[cfg(ml_switch_no_overlay)]
+    info!("[ml-rebuild] Switch compatibility: mod overlay disabled");
+    #[cfg(ml_switch_native_focus_pose)]
+    info!("[ml-rebuild] Switch compatibility: native Focus pivot and gait");
+    #[cfg(ml_switch_guard_diagnostics)]
+    info!("[ml-rebuild] Switch compatibility: guard diagnostics, native view matrix");
     BASE.store(base,Ordering::Relaxed);
     forge::install_hook!(base,sample_pad);
     #[cfg(ml_swap_r_zr)]
@@ -66,7 +94,7 @@ static WILDS_WOUNDS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
 static WILDS_LOCK_HINT: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(ml_world_combat, ml_wilds_moves, ml_recomp_runtime))]
 unsafe extern "C" { fn ml_hud_right_offset() -> u32; }
-#[cfg(all(ml_world_combat, ml_wilds_moves, ml_switch_viewport))]
+#[cfg(all(ml_world_combat, ml_wilds_moves, ml_switch_viewport, not(ml_switch_no_overlay)))]
 unsafe extern "C" { fn ml_hud_native_crop() -> u32; }
 #[cfg(ml_world_combat)]
 #[unsafe(no_mangle)]
@@ -75,6 +103,11 @@ extern "C" fn ml_wilds_charge(value: u32) { WILDS_CHARGE.store(value, Ordering::
 #[cfg(ml_world_combat)]
 #[unsafe(no_mangle)]
 extern "C" fn ml_wilds_focus(value: u32) {
+    #[cfg(ml_switch_no_overlay)]
+    if WILDS_FOCUS.swap(value, Ordering::Relaxed) != value {
+        info!("[ml-rebuild] Switch drawn focus={value}; mod overlay disabled");
+    }
+    #[cfg(not(ml_switch_no_overlay))]
     WILDS_FOCUS.store(value, Ordering::Relaxed);
 }
 
@@ -98,7 +131,7 @@ extern "C" fn ml_gauge_glow(value: u32) {
     GAUGE_GLOW.store(value, Ordering::Relaxed);
 }
 
-#[cfg(ml_ascendance_prototype)]
+#[cfg(all(ml_ascendance_prototype, not(ml_switch_no_overlay)))]
 fn fill_overlay_polygon(dl: &forge::imgui::draw::DrawList, points: &[forge::sys::imgui::ImVec2], color: u32) {
     // Some Android Forge builds mirror just the first guest array element.
     // Build the path on the host through the by-value point API.
@@ -114,7 +147,7 @@ fn fill_overlay_polygon(dl: &forge::imgui::draw::DrawList, points: &[forge::sys:
     dl.add_convex_poly_filled(points, color);
 }
 
-#[cfg(ml_world_combat)]
+#[cfg(all(ml_world_combat, not(ml_switch_no_overlay)))]
 #[forge::imgui_free_render]
 fn draw_gauge_glow() {
     use forge::imgui::{color::color, context, draw::DrawList};

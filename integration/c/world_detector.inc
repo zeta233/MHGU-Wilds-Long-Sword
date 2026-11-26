@@ -66,21 +66,27 @@ static void world_counter_accept(void *a,unsigned type)
 {
     if(world_counter_seen)return;
     world_counter_seen=1;
+#if ML_ASCENDANCE_PROTOTYPE
+    unsigned radiance_entry=world.move==W_SHEATHE&&ascendance.radiance==RADIANCE_HOLD&&
+        ascendance.radiance_entry_counter;
+#else
+    unsigned radiance_entry=0;
+#endif
 #if ML_WILDS_MOVES
     if(world.source==918&&!world.valor_foresight)world_red_time(a,RED_AURA_REFUND,919);
 #endif
 #if ML_WORLD_PRESENTATION
     /* World shell 11's accepted contact calls group 2004, record 0
      * (request 25510). A swing or an outgoing sword hit cannot trigger it. */
-    if(world.move==W_BIG || (world.move==W_FORESIGHT && world.foresight_gauge))
+    if(world.move==W_BIG||radiance_entry||(world.move==W_FORESIGHT&&world.foresight_gauge))
         world_audio_epv(a,25510,(const float *)((uptr)a+0x40));
-    if(world.move==W_BIG)world_big_counter_flash(a);
+    if(world.move==W_BIG||radiance_entry)world_big_counter_flash(a);
 #endif
     float duration=world.move==W_FORESIGHT?1.0f:2.0f;
 #if ML_ASCENDANCE_PROTOTYPE
     if(ascendance_independent_flash())duration=.22f;
 #endif
-    if(world_armor<duration)world_armor=duration;
+    if(!radiance_entry&&world_armor<duration)world_armor=duration;
     log_event("world_counter",(u32)(uptr)a,world.source,(u32)real(a,FRAME),type);
     ((void (*)(void *,u32,uptr,u32))(main_base+0x282624))(a,9,(uptr)a+0x2550,1);
 }

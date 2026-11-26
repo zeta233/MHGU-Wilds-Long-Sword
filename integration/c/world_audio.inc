@@ -162,12 +162,14 @@ static void world_audio_play(void *a,unsigned request,const float *point)
     request=wilds_resolve_wind(a,request);
 #endif
     unsigned group=byte(a,0x111a)?13:12;
+    switch_guard_stage(7,request);
     if(point)
         ((void (*)(void *,u32,void *,u32,void *,const float *,void *))(main_base+0x4ee980))
             (sm,group,world_audio_request,request,a,point,a);
     else
         ((void (*)(void *,u32,void *,u32,void *,void *))(main_base+0x4ee900))
             (sm,group,world_audio_request,request,a,a);
+    switch_guard_stage(8,request);
     log_event("world_audio_play",(u32)(uptr)a,request,(u32)(uptr)world_audio_request,(u32)(world_audio_clock*1000000));
 }
 #if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE

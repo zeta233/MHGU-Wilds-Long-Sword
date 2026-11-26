@@ -58,7 +58,7 @@ def patch_guide(version, platform, prefix):
 • 收刀时方向＋R 奔跑。方向＋ZR 走路。
 • 气刃斩、蓄力气刃斩、勇气刚气刃斩等改用 ZR，原 R 组合也改用 ZR。
 • 方向＋ZR＋X＋A 可拔刀出移动气刃斩。公会 ZR＋A 见切，ZR＋B 特殊纳刀。
-• 勇气刚一 GP 成功后，ZR 接刚二，ZR＋B 接练气解放斩。
+• 勇气刚一 GP 成功后，逐次按 ZR 接刚二和练气解放斩。未成功时，先用 ZR 接刚三，再按 ZR 接练气解放斩。
 • 公会轻按 R 后松开切换增幅，R＋X＋A 进光辉纳刀。
 • Xbox 键名 R＝RB、ZR＝RT。集中模式仍用 ZL，操作类型 0 的狩技仍用方向键。
 '''.encode('utf-8-sig')

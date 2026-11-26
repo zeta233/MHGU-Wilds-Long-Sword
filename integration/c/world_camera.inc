@@ -11,6 +11,7 @@ static unsigned world_camera_sample,world_camera_active,world_camera_object;
 static unsigned world_camera_origin[2];
 static int world_camera_delta[2];
 static float world_camera_age,world_camera_duration;
+#if !ML_SWITCH_GUARD_DIAGNOSTICS
 static u32 (*world_original_view)(void *,void *);
 static void *world_player_view_camera;
 static struct {
@@ -56,6 +57,7 @@ static u32 world_view(void *out,void *camera)
     for(unsigned k=0;k<3;++k)set_real(camera,0x40+4*k,eye[k]);
     return result;
 }
+#endif
 #if ML_WILDS_MOVES
 static unsigned focus_camera_actor,focus_camera_epoch,focus_camera_yaw;
 static unsigned world_camera_heading(void *a,unsigned *heading)
@@ -156,8 +158,10 @@ static unsigned world_camera_target(void *a,unsigned *yaw)
 static void world_camera(void *camera)
 {
     void *a=(void *)(uptr)word(camera,0x85c);
+#if !ML_SWITCH_GUARD_DIAGNOSTICS
     if(local_supported(a))world_player_view_camera=camera;
     else if(world_player_view_camera==camera)world_player_view_camera=0;
+#endif
     unsigned valid=local_supported(a)&&world_camera_actor==(u32)(uptr)a&&
         world_camera_epoch==byte(a,AREA)&&(int16_t)u16(a,HP)>0;
     if(!valid)world_camera_active=0;
@@ -216,12 +220,14 @@ static void world_camera(void *camera)
     if(local_supported(a)){
         focus_camera_actor=(u32)(uptr)a;focus_camera_epoch=byte(a,AREA);
         focus_camera_yaw=(word(camera,0x9dc)+32768u)&65535u;
+#if !ML_SWITCH_NO_OVERLAY
         if((int16_t)u16(a,HP)>0){
             world_wound_markers(a,camera);
 #if ML_ASCENDANCE_PROTOTYPE && ML_WORLD_PRESENTATION
             world_radiance_overlay(a,camera);
 #endif
         }
+#endif
     }
 #endif
 }

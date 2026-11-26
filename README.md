@@ -4,11 +4,41 @@
 
 ## 安装与按键
 
-保存并退出游戏，使用 Windows 版 MHGU Recomp 0.17.9 和 Switch Forge v1.5.1 前置。将完整安装包中的 Wilds-LS-World 文件夹解压到游戏的 mods 目录。更新前先将旧版移出 mods 备份。光辉闪斩与追击二刀的屏幕径向模糊和折射需要同一发布页提供的 Recomp 后处理补丁。
+保存并退出游戏，使用 Windows 版 MHGU Recomp 0.17.9 和 Switch Forge v1.5.1 前置。将完整安装包中的 Wilds-LS-World 文件夹解压到游戏的 mods 目录。更新前先将旧版移出 mods 备份。光辉闪斩与追击二刀的屏幕径向模糊和折射可沿用 v0.262 的 Recomp 后处理补丁。
 
 [Windows、安卓、Eden 与 Switch 发布包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/latest) · [安装与按键说明](安装与按键说明.txt) · [Recomp 后处理补丁](recomp-0.17.9/README.md)
 
-Android Recomp 可通过 Files 页导入安卓完整包。v0.271 已在荣耀 Magic8 Pro 上用 MHGU Relink 0.2.1（Forge 2.0.0）和 2808×1256 分辨率完成真机复测。 [安卓 v0.271 发布包](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.271) · [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
+Android Recomp 可通过 Files 页导入安卓完整包。v0.271 已在荣耀 Magic8 Pro 上用 MHGU Relink 0.2.1（Forge 2.0.0）和 2808×1256 分辨率完成真机复测。 [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
+
+v0.280 的任务内实测在 Windows Recomp 完成。安卓与 Eden 已完成构建和附件校验。Switch 实体机有进入集中模式、空挥居合或见切时闪退的报告，目前仍在排查。
+
+## v0.280 更新
+
+- 光辉纳刀起手可相杀，松开后的光辉闪斩保留原有相杀窗口。
+
+## v0.279 更新
+
+- 修复同一任务内换区后增幅护腕清零。储备格、未满蓄积和增幅剩余时间随猎人保留。
+
+## v0.278 更新
+
+- 勇气刚一 GP 成功后，逐次按 R 接刚二和不收刀的练气解放斩。未成功则先接刚三，再按 R 接解放斩。R 支持提前短按缓冲，长按只触发一段。
+
+## v0.277 更新
+
+- 勇气练气解放斩收势时，刀随右手落下，再平滑衔接拔刀待机或起步。
+
+## v0.276 更新
+
+- 勇气刚一 GP 成功后可提前短按或长按 X 接赤刃一。刚二收招末尾有短暂的 R＋B 输入缓冲，可接不收刀的练气解放斩。单按 R 接刚三，单按 B 仍可回避。
+
+## v0.275 更新
+
+- Switch Atmosphère 与 Eden 支持通过 Forge 保留已有的玩家受击和怪物伤害钩子。修复与 GP、伤害显示一起加载时太刀控制器拒绝启动的问题。日志会标明未通过的原生入口检查。
+
+## v0.274 更新
+
+- 勇气见切成功且回斩命中后可提前输入 R。勇气发动时接刚二，再点按 R 接原地或移动刚三，也可在刚二收招前按 R＋B 接不收刀的练气解放斩。勇气尚未发动时接普通气刃三。一次长按只触发一次派生。
 
 ## v0.273 更新
 

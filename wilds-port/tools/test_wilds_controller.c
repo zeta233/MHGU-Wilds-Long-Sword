@@ -51,22 +51,24 @@ static void valor_routes(void)
  }
  WState guard={0};
  WObservation gp=obs();
- gp.valor=1;gp.rank=0;gp.base.native_action=108;gp.base.motion=0x583;
- gp.base.held=ML_R|ML_B;gp.base.animation_frame=45;
- assert(w_valor_guard_release(&guard,&gp,0).kind==W_KEEP);
- gp.base.animation_frame=46;gp.base.native_action=130;gp.base.motion=0x5c0;
- assert(w_valor_guard_release(&guard,&gp,0).kind==W_KEEP);
- gp.base.native_action=108;gp.base.motion=0x583;
- WDecision release=w_valor_guard_release(&guard,&gp,0);
+ gp.valor=1;gp.rank=0;gp.base.held=ML_R;
+ gp.base.native_action=108;gp.base.motion=0x583;gp.base.animation_frame=55;
+ assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_SECOND).kind==W_KEEP);
+ assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_THIRD).kind==W_KEEP);
+ gp.base.native_action=116;gp.base.motion=0x5b9;gp.base.animation_frame=37;
+ assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_SECOND).kind==W_KEEP);
+ gp.base.animation_frame=38;
+ assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_THIRD).kind==W_KEEP);
+ WDecision release=w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_SECOND);
  assert(release.move==W_RELEASE&&release.rank_delta==0&&guard.valor_release);
  gp.base.motion=0x500+guard.slot;gp.base.native_action=w_action(W_RELEASE);
  assert(tick(&guard,&gp,0,W_VALOR_RELEASE_END-1).kind==W_KEEP);
  assert(tick(&guard,&gp,0,W_VALOR_RELEASE_END).kind==W_IDLE&&!guard.valor_release);
- gp.base.native_action=116;gp.base.motion=0x5b9;gp.base.animation_frame=37;
- assert(w_valor_guard_release(&guard,&gp,1).kind==W_KEEP);
- gp.base.animation_frame=38;
- assert(w_valor_guard_release(&guard,&gp,0).kind==W_KEEP);
- release=w_valor_guard_release(&guard,&gp,1);
+ gp.base.native_action=117;gp.base.motion=0x5ba;gp.base.animation_frame=109;
+ assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_THIRD).kind==W_KEEP);
+ gp.base.animation_frame=110;
+ assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_SECOND).kind==W_KEEP);
+ release=w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_THIRD);
  assert(release.move==W_RELEASE&&release.rank_delta==0&&guard.valor_release);
  /* Each independently cancellable imported strike accepts the partner button
   * in either order. The wound-confirm and airborne phases advance separately. */
@@ -291,6 +293,70 @@ static void iai_thrust_priority(void)
   assert(d.kind==W_ENTER&&d.move==W_THRUST);
  }
 }
+static void valor_foresight_routes(void)
+{
+ for(unsigned active=0;active<=1;active++)for(unsigned hold=0;hold<=1;hold++){
+  WObservation o=obs();WState s={.actor=1,.epoch=1};
+  o.valor_style=1;o.valor=active;o.rank=active?3:1;
+  o.base.held=ML_R|ML_A;s.consumed=ML_R|ML_A;s.previous_held=o.base.held;
+  w_debug_enter(&s,&o,W_FORESIGHT);
+  o.base.motion=0x500+s.slot;o.base.native_action=w_action(W_FORESIGHT);
+  unsigned cancel=active?80:90;
+  o.base.held=ML_R;o.counter=1;o.base.animation_frame=28;o.base.sample_sequence++;
+  assert(w_step(&s,&o).kind==W_KEEP&&!s.valor_foresight_r); /* R from the opener. */
+  o.base.held=0;o.base.sample_sequence++;o.counter=0;
+  assert(w_step(&s,&o).kind==W_KEEP);
+  o.base.held=ML_R;o.base.animation_frame=35;o.base.sample_sequence++;
+  assert(w_step(&s,&o).kind==W_KEEP&&s.valor_foresight_r);
+  o.base.held=hold?ML_R:0;o.base.animation_frame=cancel-1;o.base.sample_sequence++;
+  assert(w_step(&s,&o).kind==W_KEEP&&s.valor_foresight_r);
+  o.base.animation_frame=cancel;o.base.sample_sequence++;
+  assert(w_step(&s,&o).kind==W_KEEP); /* Counter without a return hit. */
+  o.contact=1;o.base.sample_sequence++;
+  WDecision d=w_step(&s,&o);
+  assert(d.kind==W_NATIVE&&d.native_action==(active?116:26));
+  assert(d.valor_foresight_second==active&&s.wilds_native_r_spent==hold&&!s.valor_foresight_r);
+  if(!active&&hold){
+   o.contact=0;o.base.native_action=26;o.base.motion=0x56c;
+   for(unsigned sample=0;sample<150;sample++){
+    o.base.animation_frame=(float)sample;o.base.sample_sequence++;
+    assert(w_step(&s,&o).kind==W_KEEP);
+   }
+  }
+ }
+ for(unsigned active=0;active<=1;active++){
+  WObservation o=obs();WState s={.actor=1,.epoch=1};
+  o.valor_style=1;o.valor=active;o.rank=active?3:1;
+  w_debug_enter(&s,&o,W_FORESIGHT);
+  o.base.motion=0x500+s.slot;o.base.native_action=w_action(W_FORESIGHT);
+  o.base.held=ML_R;o.contact=1;o.base.animation_frame=91;o.base.sample_sequence++;
+  assert(w_step(&s,&o).kind==W_KEEP&&!s.valor_foresight_r); /* Hit without a counter. */
+ }
+}
+static void valor_guard_recovery_routes(void)
+{
+ for(unsigned action=108;action<=109;action++){
+  WObservation o=obs();WState s={.actor=1,.epoch=1};
+  o.valor_style=o.valor=1;o.base.eligible=1;
+  o.base.native_action=action;o.base.motion=0x583;
+  o.base.held=ML_X;o.base.animation_frame=20;o.base.sample_sequence++;
+  assert(w_step(&s,&o).kind==W_KEEP&&s.spirit_crimson_pending);
+  o.base.held=0;o.base.animation_frame=45;o.base.sample_sequence++;
+  assert(w_step(&s,&o).kind==W_KEEP);
+  o.base.animation_frame=46;o.base.sample_sequence++;
+  WDecision d=w_step(&s,&o);
+  assert(d.kind==W_ENTER&&d.move==W_CHIJIN&&d.source==W_CRIMSON_STATIONARY);
+ }
+ const unsigned seconds[]={116,136,138,140};
+ for(unsigned i=0;i<sizeof(seconds)/sizeof(*seconds);i++){
+  WObservation o=obs();WState s={0};o.valor_style=o.valor=1;
+  o.base.native_action=seconds[i];o.base.motion=0x5b9;o.base.animation_frame=99;
+  assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_SECOND).move==W_RELEASE&&s.valor_release);
+ }
+ WObservation o=obs();WState s={0};o.valor_style=o.valor=1;o.state=1;
+ assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_SECOND).kind==W_KEEP);
+ assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_TAIL).move==W_RELEASE&&s.valor_release);
+}
 static void short_spirit_costs(void)
 {
  const unsigned sources[]={104,106,108},frames[]={56,54,110},costs[]={15,20,25};
@@ -316,6 +382,8 @@ int main(void){
  short_spirit_costs();
  iai_held_entry();
  iai_thrust_priority();
+ valor_foresight_routes();
+ valor_guard_recovery_routes();
  WObservation o=obs();WState s={0};WDecision d;
  assert(w_wilds_enter(&s,&o,W_RELEASE).kind==W_KEEP);
  s.move=W_LAND;s.wilds_helm_red=0;assert(w_wilds_enter(&s,&o,W_RELEASE).kind==W_KEEP);

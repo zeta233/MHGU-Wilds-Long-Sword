@@ -21,6 +21,8 @@ static struct {
     float dividing_hold_ticks,dividing_travel_frame;
     unsigned flash_step_release;
     unsigned double_resheathe_step;
+    unsigned quest;
+    unsigned radiance_entry_sample,radiance_entry_counter;
 } ascendance;
 
 /* Pursuit follows the particular monster whose native reaction accepted
@@ -81,9 +83,43 @@ static void world_helm_impact(void *,const float *);
 #endif
 extern void ml_ascendance_gauge(unsigned);
 
+static unsigned ascendance_in_town(void)
+{
+    const void *control=(const void *)(uptr)word((const void *)main_base,0x188ca48);
+    return control&&byte(control,0x4c)!=255;
+}
+
+static unsigned ascendance_quest_data(void)
+{
+    const void *quest=(const void *)(uptr)word((const void *)main_base,0x188ad90);
+    return quest?word(quest,0xa4):0;
+}
+
+static void ascendance_rebind(void *a,unsigned quest,unsigned area,unsigned sample,unsigned carry)
+{
+    unsigned charge=carry?ascendance.charge:0;
+    float remaining=carry?ascendance.remaining:0;
+    ascendance=(__typeof__(ascendance)){
+        .actor=a,.quest=quest,.area=area,.sample=sample,.charge=charge,.remaining=remaining};
+    musou=(__typeof__(musou)){0};
+    radiance_pursuit=(__typeof__(radiance_pursuit)){0};
+#if ML_WILDS_MOVES
+    red_musou=(__typeof__(red_musou)){0};
+#endif
+}
+
+static void ascendance_quest_poll(void)
+{
+    /* Town input still updates when the quest hunter no longer does. */
+    if(ascendance.actor&&ascendance_in_town()){
+        ascendance_rebind(0,0,0,0,0);
+        ml_ascendance_gauge(0);
+    }
+}
+
 static unsigned ascendance_owner(void *a)
 {
-    return a&&ascendance.actor==a&&ascendance.area==byte(a,AREA)&&
+    return a&&ascendance.actor==a&&ascendance.area&&ascendance.area!=255&&ascendance.area==byte(a,AREA)&&
         (int16_t)u16(a,HP)>0&&hunter_style(a)==0;
 }
 
@@ -1842,6 +1878,31 @@ static u32 ascendance_wall(void *a,u32 b,u32 c,u32 d)
     return result;
 }
 
+static WDecision ascendance_radiance_begin(void *a,const WObservation *o)
+{
+    WDecision d=w_radiance_enter(&world,o,W_SHEATHE);
+    if(d.kind==W_ENTER){
+        if(o->state==16||o->state==0x4000){
+            d.motion_contract=1;d.blend=8;d.speed=1;
+        }
+        if(ascendance.remaining<=0){
+            log_event("ascendance_start",(u32)(uptr)a,25,0,1);
+        }
+        ascendance_spend_reserve();
+        ascendance.radiance=RADIANCE_HOLD;
+        ascendance.radiance_entry_sample=o->base.sample_sequence;
+        ascendance.radiance_entry_counter=0;
+        ascendance.boost_toggle_pending=0;
+        ascendance.flash_step_release=0;
+        ascendance.radiance_hit=0;
+        ascendance.flash_r_buffered=0;
+        radiance_pursuit=(__typeof__(radiance_pursuit)){0};
+        log_event("ascendance_radiance",(u32)(uptr)a,RADIANCE_INPUT,
+            (o->state<<16)|o->base.native_action,(u32)(o->base.animation_frame*1000));
+    }
+    return d;
+}
+
 static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned raw,unsigned edge,unsigned start)
 {
     if(ascendance.musou_sheathe_r){
@@ -1926,27 +1987,7 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
     if(red.kind!=W_KEEP)return red;
 #endif
     unsigned keys=o->base.held;
-    if(start){
-        WDecision d=w_radiance_enter(&world,o,W_SHEATHE);
-        if(d.kind==W_ENTER){
-            if(o->state==16||o->state==0x4000){
-                d.motion_contract=1;d.blend=8;d.speed=1;
-            }
-            if(ascendance.remaining<=0){
-                log_event("ascendance_start",(u32)(uptr)a,25,0,1);
-            }
-            ascendance_spend_reserve();
-            ascendance.radiance=RADIANCE_HOLD;
-            ascendance.boost_toggle_pending=0;
-            ascendance.flash_step_release=0;
-            ascendance.radiance_hit=0;
-            ascendance.flash_r_buffered=0;
-            radiance_pursuit=(__typeof__(radiance_pursuit)){0};
-            log_event("ascendance_radiance",(u32)(uptr)a,RADIANCE_INPUT,
-                (o->state<<16)|o->base.native_action,(u32)(o->base.animation_frame*1000));
-        }
-        return d;
-    }
+    if(start)return ascendance_radiance_begin(a,o);
     if(ascendance.radiance!=RADIANCE_HOLD||!ascendance_owner(a)||world.move!=W_SHEATHE)
         return (WDecision){0};
     if(!o->grounded||!o->alive||!o->resources_ready)return (WDecision){0};
@@ -1994,6 +2035,8 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
                 ascendance.flash_travel=0;
                 log_event("ascendance_flash_step",(u32)(uptr)a,word(a,0x40),word(a,0x48),world.heading);
             }
+            world.counter_success=ascendance.radiance_entry_counter;
+            ascendance.radiance_entry_counter=0;
             ascendance.radiance=RADIANCE_RELEASE;
             log_event("ascendance_flash",(u32)(uptr)a,keys,stamina>0?(unsigned)stamina:0,world.heading);
         }
@@ -2008,16 +2051,23 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
 {
     const MLObservation *b=&o->base;
     unsigned area=byte(a,AREA);
-    if(!o->alive||!o->resources_ready||!area||area==255||hunter_style(a)!=0){
-        if(ascendance.actor==a){
-            ascendance=(__typeof__(ascendance)){0};musou=(__typeof__(musou)){0};
-        }
+    unsigned quest=ascendance_quest_data();
+    if(!o->alive||hunter_style(a)!=0||ascendance_in_town()){
+        if(ascendance.actor==a)ascendance_rebind(0,0,0,0,0);
         ml_ascendance_gauge(0);
         return;
     }
-    if(ascendance.actor!=a||ascendance.area!=area){
-        ascendance=(__typeof__(ascendance)){.actor=a,.area=area,.sample=b->sample_sequence};
-        musou=(__typeof__(musou)){0};
+    unsigned owned=ascendance.actor==a;
+    if(!quest||!o->resources_ready||!area)area=255;
+    if(!quest&&owned)quest=ascendance.quest;
+    /* Loading and camp suspend the meter. A new combat area only resets move
+     * state and target references, while the same quest keeps its progress. */
+    if(!owned||ascendance.quest!=quest||ascendance.area!=area){
+        ascendance_rebind(a,quest,area,b->sample_sequence,owned&&quest==ascendance.quest);
+    }
+    if(area==255){
+        ml_ascendance_gauge(0);
+        return;
     }
     if(ascendance.sample!=b->sample_sequence){
         ascendance.sample=b->sample_sequence;

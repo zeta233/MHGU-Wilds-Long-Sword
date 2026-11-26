@@ -80,8 +80,10 @@ static void world_sfx_oriented(void *a,const float *point,unsigned uid,const flo
         }
     }
     uptr *vt=*(uptr **)a;
+    switch_guard_stage(9,uid);
     uptr effect=((uptr (*)(void *,void *,u32,u32,void *,uptr))vt[0x138/4])
         (a,world_sfx_handle,2,uid,request,word(a,0x3310));
+    switch_guard_stage(10,uid);
     world_iai_track_tail((void *)effect,uid);
     ((void (*)(void *))(main_base+0x40b50))(request);
     log_event("world_simple_fx_emit",(u32)(uptr)a,uid,world.source,effect!=0);

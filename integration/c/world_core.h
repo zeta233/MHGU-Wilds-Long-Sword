@@ -43,7 +43,7 @@ typedef struct {
     unsigned kind,move,source,slot,native_action,heading;
     int rank_delta,gauge_delta;
     unsigned gauge_clear,gauge_fill,regen_seconds;
-    unsigned valor_gain,skip_round_rank;
+    unsigned valor_gain,valor_foresight_second;
     unsigned red_recovery;
     unsigned motion_contract,crimson_direction,sheathed_roll;
     unsigned valor_slide,valor_slide_heading,valor_slide_input;
@@ -85,8 +85,8 @@ typedef struct {
     float wilds_charge_carry;
     unsigned wilds_charge_carry_source,wilds_charge_carry_action;
     unsigned wilds_charge_open,wilds_charge_link,wilds_three_exit_r,wilds_three_exit_sample,wilds_red_three_held;
-    unsigned wilds_slide_exit_sample,wilds_slide_exit_r,wilds_slide_weak_r;
-    unsigned red_foresight_chain,valor_foresight;
+    unsigned wilds_slide_exit_sample,wilds_slide_exit_r,wilds_native_r_spent;
+    unsigned red_foresight_chain,valor_foresight,valor_foresight_r;
     unsigned wilds_direction_pending,wilds_direction_heading,wilds_direction_input;
     float wilds_direction_age;
     float entry_start;
@@ -172,6 +172,15 @@ static inline unsigned w_valor_guard_reaction(unsigned state,unsigned action,uns
 {
     return state==16&&(action==108||action==109)&&motion==0x583;
 }
+static inline unsigned w_valor_second_action(unsigned state,unsigned action)
+{
+    return state==16&&(action==116||action==136||action==138||action==140);
+}
+static inline unsigned w_valor_third_action(unsigned state,unsigned action)
+{
+    return state==16&&(action==117||action==137||action==139||action==141);
+}
+enum { W_VALOR_RELEASE_SECOND=1,W_VALOR_RELEASE_THIRD,W_VALOR_RELEASE_TAIL };
 static inline unsigned w_spirit_one_crimson_source(unsigned state,unsigned action,unsigned motion)
 {
     return w_native_spirit_one(state,action)&&w_guild_source(state,action,motion)==104;
@@ -205,7 +214,7 @@ unsigned w_native_roll(unsigned state,unsigned action);
 void w_reset(WState *s);
 WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move);
 WDecision w_art_follow(WState *s,const WObservation *o,unsigned keys);
-WDecision w_valor_guard_release(WState *s,const WObservation *o,unsigned second);
+WDecision w_valor_chain_release(WState *s,const WObservation *o,unsigned from);
 WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsigned charge);
 WDecision w_iai_press(WState *s,const WObservation *o);
 WDecision w_iai_attack(WState *s,const WObservation *o,unsigned key);

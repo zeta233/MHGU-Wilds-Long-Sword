@@ -50,6 +50,14 @@ extern void forge_patch_enable(PublicPatch *);
 extern void forge_patch_disable(PublicPatch *);
 extern void forge_patch_destroy(PublicPatch *);
 extern PublicHook forge_hook_create(void *,void *,void **);
+extern void ml_startup_guard(u32,u32,u32);
+
+static unsigned native_guard(u32 offset,u32 observed,u32 expected)
+{
+    if(observed==expected)return 1;
+    ml_startup_guard(offset,observed,expected);
+    return 0;
+}
 
 enum {VT=0x174cf64,STATE=0x2506,ACTION=0x250a,HEADING=0xfec,TARGET=0x14a0,
       FRAME=0x500,MOTION=0x4b4,AREA=0x1054,HP=0x13d6,DRAWN=0x2749,AIR=0x2514};
@@ -141,6 +149,9 @@ static void ml_pad_read(void)
 #if ML_WORLD_COMBAT && ML_WILDS_MOVES
 static void world_art_poll(void);
 #endif
+#if ML_WORLD_COMBAT && ML_ASCENDANCE_PROTOTYPE
+static void ascendance_quest_poll(void);
+#endif
 void ml_pad_refresh(void)
 {
     ++sample_sequence;
@@ -154,6 +165,9 @@ void ml_pad_refresh(void)
 #endif
 #if ML_WORLD_COMBAT && ML_WILDS_MOVES
     world_art_poll();
+#endif
+#if ML_WORLD_COMBAT && ML_ASCENDANCE_PROTOTYPE
+    ascendance_quest_poll();
 #endif
 }
 u32 ml_pad_raw_bits(void)
@@ -687,8 +701,7 @@ static struct {
     unsigned area,started,socket_motion,start_heading;
     float grip_progress,yaw_lag;
     unsigned last_heading,rear_turn;
-    float initial[7],last,release_blade[16];
-    unsigned release;
+    float initial[7],last;
 } pursuit_idle_grip;
 static unsigned step_round_grip_offsets(void *a,float *yaw,float *pitch);
 /* Preserve the corrected blade pose in joint 12 space at the end of the
@@ -781,14 +794,10 @@ static unsigned pursuit_grip_return(void *a,void *o,unsigned motion,unsigned pos
 {
     float f=real(a,FRAME);
     unsigned flash=motion==0x500+RADIANCE_FLASH_SLOT&&f>=RADIANCE_FLASH_FRAMES-4;
-    unsigned valor_release_tail=motion==0x500+250&&f>=W_VALOR_RELEASE_END-5&&f<W_VALOR_RELEASE_END+2;
-    if(valor_release_tail||flash||(motion==0x500+PURSUIT_SECOND_SLOT&&f>=30)||
+    if(flash||(motion==0x500+PURSUIT_SECOND_SLOT&&f>=30)||
        (motion==0x500+PURSUIT_FIRST_SLOT&&f>=PURSUIT_FIRST_BRANCH)){
         pursuit_idle_grip.owner=a;pursuit_idle_grip.blade=o;
         pursuit_idle_grip.area=byte(a,AREA);pursuit_idle_grip.started=0;
-        pursuit_idle_grip.release=valor_release_tail;
-        if(valor_release_tail)
-            for(unsigned i=0;i<16;++i)pursuit_idle_grip.release_blade[i]=real(o,0xb0+4*i);
         return posed;
     }
     unsigned walk=motion==0x504;
@@ -806,7 +815,6 @@ static unsigned pursuit_grip_return(void *a,void *o,unsigned motion,unsigned pos
             pursuit_idle_grip.owner=0;return posed;
         }
         const float *before=(const float *)((uptr)o+0xb0);
-        if(pursuit_idle_grip.release&&!pursuit_idle_grip.started)before=pursuit_idle_grip.release_blade;
         const float *parent=((const float *(*)(void *,u32))(*(uptr **)a)[0x54/4])(a,*joint);
         if(!attachment_relative_pose(parent,before,pursuit_idle_grip.initial)){
             pursuit_idle_grip.owner=0;return posed;
@@ -930,6 +938,74 @@ static void blend_entry_grip(void *a,void *o,unsigned motion,float *pose)
     }else handoff.blend=0;
     for(unsigned i=0;i<7;++i)handoff.pose[i]=pose[i+(i>=3)];
     handoff.actor=a;handoff.object=o;handoff.epoch=byte(a,AREA);handoff.motion=motion;
+}
+
+/* The release ends while the right hand is still raised. Carry its local
+ * grip through the body blend, then hand it back to GU's drawn socket. */
+enum { VALOR_RELEASE_BODY_BLEND=18, VALOR_RELEASE_GRIP_HOLD=10, VALOR_RELEASE_GRIP_END=22 };
+static struct {
+    void *actor,*blade;
+    unsigned area,motion;
+    float last,elapsed,pose[12];
+} valor_release_grip;
+static unsigned valor_release_grip_return(void *a,void *blade,unsigned motion,unsigned posed,
+                                           float *pose,u32 *joint,u32 *closed)
+{
+    float frame=real(a,FRAME);
+    if(motion==0x500+250&&frame>=W_VALOR_RELEASE_END-5&&frame<W_VALOR_RELEASE_END+2&&
+       posed&&*joint==12&&!*closed){
+        valor_release_grip.actor=a;valor_release_grip.blade=blade;
+        valor_release_grip.area=byte(a,AREA);valor_release_grip.motion=motion;
+        valor_release_grip.last=frame;valor_release_grip.elapsed=0;
+        for(unsigned i=0;i<12;++i)valor_release_grip.pose[i]=pose[i];
+        return posed;
+    }
+    if(valor_release_grip.actor!=a||valor_release_grip.blade!=blade)return posed;
+    unsigned state=u16(a,STATE);
+    if(valor_release_grip.area!=byte(a,AREA)||!(byte(a,DRAWN)&1)||
+       (state!=1&&state!=2)||u16(a,ACTION)>5||!(frame>=0&&frame<10000)){
+        valor_release_grip.actor=0;return posed;
+    }
+    float elapsed=valor_release_grip.elapsed;
+    if(motion!=valor_release_grip.motion||frame<valor_release_grip.last)elapsed+=frame;
+    else elapsed+=frame-valor_release_grip.last;
+    valor_release_grip.motion=motion;valor_release_grip.last=frame;valor_release_grip.elapsed=elapsed;
+    if(elapsed>=VALOR_RELEASE_GRIP_END){
+        valor_release_grip.actor=0;return posed;
+    }
+    const float *grip=valor_release_grip.pose;
+    if(elapsed<=VALOR_RELEASE_GRIP_HOLD){
+        for(unsigned i=0;i<12;++i)pose[i]=grip[i];
+    }else{
+        if(!posed){
+            *joint=word(blade,0x13cc);*closed=word(blade,0x13d4)==2;
+            for(unsigned i=0;i<12;++i)pose[i]=real(blade,0x40+4*i);
+        }
+        if(*closed||*joint>=255){valor_release_grip.actor=0;return posed;}
+        if(*joint!=12){
+            const float *(*matrix)(void *,u32)=(const float *(*)(void *,u32))(*(uptr **)a)[0x54/4];
+            float relative[7],point[3],rotation[4];
+            if(!attachment_relative_pose(matrix(a,12),matrix(a,*joint),relative))return posed;
+            attachment_rotate(relative+3,pose,point);
+            attachment_multiply(relative+3,pose+4,rotation);
+            for(unsigned i=0;i<3;++i)pose[i]=relative[i]+point[i];
+            for(unsigned i=0;i<4;++i)pose[4+i]=rotation[i];
+        }
+        float t=(elapsed-VALOR_RELEASE_GRIP_HOLD)/(VALOR_RELEASE_GRIP_END-VALOR_RELEASE_GRIP_HOLD);
+        t=t*t*(3-2*t);
+        float dot=0,n=0;
+        for(unsigned i=4;i<8;++i)dot+=grip[i]*pose[i];
+        for(unsigned i=4;i<8;++i){
+            pose[i]=(1-t)*grip[i]+(dot<0?-t:t)*pose[i];
+            n+=pose[i]*pose[i];
+        }
+        if(!(n>.00001f))return posed;
+        n=att_sqrt(n);
+        for(unsigned i=4;i<8;++i)pose[i]/=n;
+        for(unsigned i=0;i<3;++i)pose[i]=grip[i]+t*(pose[i]-grip[i]);
+        for(unsigned i=8;i<11;++i)pose[i]=grip[i]+t*(pose[i]-grip[i]);
+    }
+    *joint=12;*closed=0;return 1;
 }
 #endif
 static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
@@ -1056,6 +1132,9 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
 #if ML_ASCENDANCE_PROTOTYPE
     if(role==9&&(motion==0x500+127||motion==0x500+224))posed=step_round_grip(a,object,posed,pose,&joint,&closed);
     if(role==9)posed=pursuit_grip_return(a,object,motion,posed,pose,&joint,&closed);
+#endif
+#if ML_WILDS_MOVES
+    if(role==9)posed=valor_release_grip_return(a,object,motion,posed,pose,&joint,&closed);
 #endif
     if(posed)holster[ix].object=0;
     else if(round_seat||!holster_pose(a,object,ix,prior,pose,&joint,&closed))return result;
@@ -1261,7 +1340,7 @@ static MLObservation observe(void *a,unsigned direction)
 #endif
 static u32 request_hook(void *a,u32 state,u32 action,u32 flags)
 {
-    if(submitting||!local_supported(a))return original_request(a,state,action,flags);
+    if(!installed||submitting||!local_supported(a))return original_request(a,state,action,flags);
     /* Requests can precede the post-poll hook. Refresh bits without adding
      * another simulation sample or advancing any buffered-key timer. */
     ml_pad_read();
@@ -1343,7 +1422,7 @@ static uptr __attribute__((pcs("aapcs-vfp"))) layer_hook(void *a,u32 layer,u32 m
             if(round_idle)
                 round_walk=(__typeof__(round_walk)){.actor=a,.area=byte(a,AREA),.sample=sample_sequence};
 #endif
-            float idle_blend=release_idle?((byte(a,DRAWN)&1)?18.f:12.f):round_idle?6.f:8.f;
+            float idle_blend=release_idle?((byte(a,DRAWN)&1)?VALOR_RELEASE_BODY_BLEND:12.f):round_idle?6.f:8.f;
             if((motion==5001u||(release_idle&&motion==1u)||round_idle)&&blend<idle_blend){
                 flags|=0x81u;blend=idle_blend;
                 if(round_idle)log_event("round_idle_blend",(u32)(uptr)a,motion,flags,(u32)blend);
@@ -1352,6 +1431,11 @@ static uptr __attribute__((pcs("aapcs-vfp"))) layer_hook(void *a,u32 layer,u32 m
     }
 #endif
 #if ML_WILDS_MOVES
+    if(!layer&&motion==5004u&&u16(a,MOTION)==0x501&&valor_release_grip.actor==a&&
+       valor_release_grip.area==byte(a,AREA)&&valor_release_grip.elapsed<VALOR_RELEASE_GRIP_HOLD&&blend<10.f){
+        flags|=0x81u;blend=10.f;
+        log_event("valor_release_walk_blend",(u32)(uptr)a,motion,flags,(u32)blend);
+    }
 #if ML_ASCENDANCE_PROTOTYPE
     if(!layer&&motion==42&&release_walk_turn.actor==(u32)(uptr)a&&
        release_walk_turn.epoch==byte(a,AREA)&&!release_walk_turn.source){
@@ -1496,12 +1580,18 @@ u32 ml_install(u32 base)
     volatile uptr *vt=(volatile uptr *)(main_base+VT);
     const u32 offsets[]={0x324,0x318,0x31c,0xc4,0x2f8};
     const u32 expected[]={0x11998b0,0x2cbfcc,0x2e5810,0x2a1d8c,0x119f7a0};
-    for(u32 i=0;i<5;++i)if(vt[offsets[i]/4]!=main_base+expected[i]){
-        log_event("foreign_vtable_refused",0,offsets[i],vt[offsets[i]/4],main_base+expected[i]);return 0;}
-    if(*(u32 *)(main_base+0x2ab670)!=0xe92d47f0u||*(u32 *)(main_base+0x2ab674)!=0xe24dd018u)return 0;
+    for(u32 i=0;i<5;++i)
+        if(!native_guard(VT+offsets[i],vt[offsets[i]/4],main_base+expected[i]))return 0;
+    if(!native_guard(0x2ab670,*(u32 *)(main_base+0x2ab670),0xe92d47f0u)||
+       !native_guard(0x2ab674,*(u32 *)(main_base+0x2ab674),0xe24dd018u))return 0;
 #if ML_ATTACHMENT_PREVIEW || ML_WORLD_COMBAT
-    if(*(u32 *)(main_base+0x3078b8)!=0xe92d4bf0u||*(u32 *)(main_base+0x3078bc)!=0xe28db018u)return 0;
-    if(*(u32 *)(main_base+0x308b3c)!=0xe92d47f0u||*(u32 *)(main_base+0x308b40)!=0xed2d8b02u)return 0;
+    if(!native_guard(0x3078b8,*(u32 *)(main_base+0x3078b8),0xe92d4bf0u)||
+       !native_guard(0x3078bc,*(u32 *)(main_base+0x3078bc),0xe28db018u)||
+       !native_guard(0x308b3c,*(u32 *)(main_base+0x308b3c),0xe92d47f0u)||
+       !native_guard(0x308b40,*(u32 *)(main_base+0x308b40),0xed2d8b02u))return 0;
+#endif
+#if ML_WORLD_COMBAT
+    if(!world_preflight())return 0;
 #endif
     original_weapon=(NativeCall)vt[0x324/4];original_common1=(NativeCall)vt[0x318/4];
     original_common2=(NativeCall)vt[0x31c/4];original_layer=(NativeLayer)vt[0xc4/4];virtual_request=(NativeCall)vt[0x2f8/4];
@@ -1513,7 +1603,7 @@ u32 ml_install(u32 base)
     }
 #if ML_ANIMATION_PREVIEW || ML_WORLD_COMBAT
     volatile uptr *equipment_vt=(volatile uptr *)(main_base+0x1752088);
-    if(equipment_vt[0x28/4]!=main_base+0x3077f0){restore();return 0;}
+    if(!native_guard(0x1752088+0x28,equipment_vt[0x28/4],main_base+0x3077f0)){restore();return 0;}
     original_equipment=(NativeCall)equipment_vt[0x28/4];
     uptr equipment_detour=(uptr)preview_equipment;
     patches[4]=forge_patch_create((void *)(equipment_vt+0x28/4),&equipment_detour,4,0);patch_count=5;
@@ -1522,7 +1612,7 @@ u32 ml_install(u32 base)
 #endif
 #if ML_WORLD_COMBAT && ML_WORLD_PRESENTATION
     volatile uptr *poly=(volatile uptr *)(main_base+0x1790c84+96);
-    if(*poly!=main_base+0xab7f2c){restore();return 0;}
+    if(!native_guard(0x1790c84+96,*poly,main_base+0xab7f2c)){restore();return 0;}
     world_original_poly=(int (*)(void *))*poly;
     uptr poly_update=(uptr)world_poly_update;
     patches[5]=forge_patch_create((void *)poly,&poly_update,4,0);patch_count=6;

@@ -70,6 +70,7 @@ static WDecision world_route(WState *s,const WObservation *o,unsigned edge)
     if(!n)return (WDecision){0};
     int dest=n->kind==2?w_ground_select(edge,0):(int)edge;
 #if ML_WILDS_MOVES
+    if(s->move==W_FORESIGHT&&o->valor_style&&dest==5)return (WDecision){0};
     /* A resolved ordinary cut retains its source cancel window. */
     if(o->rank==3&&o->grounded&&o->base.held==ML_X&&
        (dest==3||dest==4||dest==10||dest==11||dest==38))return w_wilds_enter(s,o,W_CHIJIN);
@@ -112,13 +113,7 @@ static WDecision world_route(WState *s,const WObservation *o,unsigned edge)
 #if ML_WILDS_MOVES
     if(!spirit_available(o,w_spirit_link_cost(action)))return (WDecision){0};
 #endif
-#if ML_WILDS_MOVES
-    unsigned skip_round_rank=action==30&&s->move==W_FORESIGHT&&s->source!=918&&o->valor_style;
-#endif
     WDecision d=w_leave(s);d.kind=W_NATIVE;d.native_action=action;d.heading=o->base.heading;
-#if ML_WILDS_MOVES
-    d.skip_round_rank=skip_round_rank;
-#endif
     return d;
 }
 /* Preserve a two-button tap across GU's native request hook and the
@@ -148,6 +143,22 @@ static void world_guild_chords(WState *s,unsigned held,const uint32_t *permissio
 }
 #include "wilds_controller.inc"
 #if ML_WILDS_MOVES
+static WDecision valor_foresight_follow(WState *s,const WObservation *o,const WEvent *event,unsigned fresh_r)
+{
+    const MLObservation *b=&o->base;
+    if(!o->grounded||(b->held&~ML_R)||(s->valor_foresight&&!o->valor))s->valor_foresight_r=0;
+    else if(s->counter_success&&fresh_r)s->valor_foresight_r=1;
+    if(!s->valor_foresight_r||!s->hit_success)return (WDecision){0};
+    unsigned red=s->source==918;
+    unsigned ready=red?b->animation_frame>=wilds_clip(918)->cancel:input_stage(event,WI_R)==3;
+    if(!ready||!spirit_available(o,o->valor?15:20))return (WDecision){0};
+    WDecision d=wilds_native(s,o,o->valor?116:26);
+    d.valor_foresight_second=o->valor;
+    s->wilds_native_r_spent=b->held==ML_R;
+    s->wilds_bridge_held=b->held;
+    return d;
+}
+
 /* The complete physical chord needs no single-button confirmation. Keep a
  * released tap on its source action until that action permits the cancel. */
 WDecision w_foresight_press(WState *s,const WObservation *o)

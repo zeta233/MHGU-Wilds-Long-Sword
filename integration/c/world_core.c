@@ -177,6 +177,7 @@ unsigned w_valor_chord(unsigned state,unsigned action,unsigned motion,float fram
     if(!move)return 0;
     if((state==1||state==2)&&action<=5)return move==W_FORESIGHT?0:move;
     if(state!=16)return 0;
+    if(move==W_CHIJIN&&w_valor_guard_reaction(state,action,motion))return frame>=46?move:0;
     /* Keep the immediate native GP on a lone R. Accept the partner button
      * during the first few frames of the native opener in either key order. */
     if(frame<=8&&action==130&&motion==0x5c0&&(move==W_THRUST||move==W_FOCUS))return move;
@@ -359,8 +360,9 @@ WDecision w_leave(WState *s)
 #endif
     if(s->helm_cost_pending&&s->rank)d.rank_delta-=1;
     s->helm_cost_pending=0;s->valor_release=0;s->red_foresight_chain=0;s->wilds_charge_link=0;
+    s->valor_foresight_r=0;
     s->wilds_three_exit_r=s->wilds_three_exit_sample=0;
-    s->wilds_slide_exit_sample=s->wilds_slide_exit_r=s->wilds_slide_weak_r=0;
+    s->wilds_slide_exit_sample=s->wilds_slide_exit_r=s->wilds_native_r_spent=0;
     s->spirit_crimson_pending=s->spirit_crimson_repeat=0;
     s->wilds_charge_carry=0;s->wilds_charge_carry_source=s->wilds_charge_carry_action=0;
     s->move=s->bound=s->queued=0;s->source=s->slot=0;s->ground_node=s->main_source=0;return d;
@@ -589,15 +591,22 @@ WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move)
 }
 
 #if ML_WILDS_MOVES
-WDecision w_valor_guard_release(WState *s,const WObservation *o,unsigned second)
+WDecision w_valor_chain_release(WState *s,const WObservation *o,unsigned from)
 {
     if(s->move||!o->valor||!o->alive||!o->grounded||!o->drawn||!o->resources_ready)return (WDecision){0};
     const MLObservation *b=&o->base;
-    if(second){
-        if(o->state!=16||b->native_action!=116||b->motion!=0x5b9||b->animation_frame<38)return (WDecision){0};
-    }else if(!w_valor_guard_reaction(o->state,b->native_action,b->motion)||b->animation_frame<46)
-        return (WDecision){0};
-    WDecision d=enter(s,o,W_RELEASE,ML_R|ML_B);
+    if(from==W_VALOR_RELEASE_SECOND){
+        if(!w_valor_second_action(o->state,b->native_action)||b->motion!=0x5b9||b->animation_frame<38)
+            return (WDecision){0};
+    }else if(from==W_VALOR_RELEASE_THIRD){
+        if(!w_valor_third_action(o->state,b->native_action))return (WDecision){0};
+        unsigned ready=b->native_action==117?(b->motion==0x5ba&&b->animation_frame>=110):
+            (b->motion==0x5c2&&b->animation_frame>=50)||(b->motion==0x5b9&&b->animation_frame>=22);
+        if(!ready)return (WDecision){0};
+    }else if(from==W_VALOR_RELEASE_TAIL){
+        if((o->state!=1&&o->state!=2)||b->native_action>5)return (WDecision){0};
+    }else return (WDecision){0};
+    WDecision d=enter(s,o,W_RELEASE,ML_R);
     s->valor_release=1;
     d.motion_contract=1;d.blend=8;d.speed=1;
     return d;
@@ -764,6 +773,9 @@ WDecision w_step(WState *s,const WObservation *o)
     w_keys_tick(&s->keys,b);
     if(s->move&&!w_private(o->state,b->native_action)){d=combine(d,w_leave(s));d.kind=W_ABORT;return d;}
     unsigned new_sample=s->sample!=b->sample_sequence;
+#if ML_WORLD_INPUT_VM && ML_WILDS_MOVES
+    unsigned fresh_r=new_sample&&b->held==ML_R&&!(s->previous_held&ML_R)&&!(s->consumed&ML_R);
+#endif
     if(new_sample){s->previous_held=b->held;s->sample=b->sample_sequence;s->consumed&=b->held;}
     unsigned held=b->held&~s->consumed;
     unsigned source=s->move?s->source:w_source(b->motion);
@@ -814,6 +826,12 @@ WDecision w_step(WState *s,const WObservation *o)
         s->rank_paid=1;spirit_round_reward(&d,o->rank);
     }
 #if ML_WORLD_INPUT_VM
+#if ML_WILDS_MOVES
+    if(s->move==W_FORESIGHT&&o->valor_style){
+        WDecision follow=valor_foresight_follow(s,o,e,fresh_r);
+        if(follow.kind!=W_KEEP)return combine(d,follow);
+    }
+#endif
     return combine(d,world_command_step(s,o,source,e));
 #endif
     if(s->move==W_GROUND&&s->main_source&&

@@ -21,7 +21,7 @@ static WDecision wilds_directional_weak_spirit(WState *s,const WObservation *o)
     WDecision d=wilds_native(s,o,spirit_available(o,15)?16:17);
     /* The weak fallback already spent this directional gesture. Holding
      * its R must not reinterpret it as a stationary charge. */
-    s->wilds_slide_weak_r=o->base.held==ML_R;
+    s->wilds_native_r_spent=o->base.held==ML_R;
     return d;
 }
 static unsigned wilds_spirit_is_two(unsigned source)
@@ -223,7 +223,7 @@ static WDecision wilds_bridge(WState *s,const WObservation *o,unsigned source)
         s->wilds_charge_carry=0;
         s->wilds_charge_carry_source=s->wilds_charge_carry_action=0;
     }
-    if(b->held!=ML_R)s->wilds_slide_weak_r=0;
+    if(b->held!=ML_R)s->wilds_native_r_spent=0;
     if(s->wilds_slide_exit_sample){
         if(source!=1||!o->drawn||!o->grounded||o->valor||!spirit_available(o,15)||
            (b->held&~ML_R)||!w_moving_spirit_recovery(s,b->sample_sequence)){
@@ -327,7 +327,7 @@ static WDecision wilds_bridge(WState *s,const WObservation *o,unsigned source)
             s->wilds_r_pending=s->wilds_red_three_held=0;
             s->wilds_bridge_hold=0;
         }else if(b->held==ML_R){
-            if((edge&ML_R)||(source_changed&&previous==ML_R)){
+            if(!s->wilds_native_r_spent&&((edge&ML_R)||(source_changed&&previous==ML_R))){
                 s->wilds_r_pending=0;s->wilds_red_three_held=1;s->wilds_bridge_hold=0;
             }
             if(s->wilds_red_three_held){
@@ -346,7 +346,7 @@ static WDecision wilds_bridge(WState *s,const WObservation *o,unsigned source)
     }
     if(ordinary_source&&!ordinary_charge)s->wilds_charge_link=0;
     if(permission==3)s->wilds_charge_open=1;
-    if(allowed&&s->wilds_charge_open&&b->held==ML_R&&!s->wilds_slide_weak_r){
+    if(allowed&&s->wilds_charge_open&&b->held==ML_R&&!s->wilds_native_r_spent){
         s->wilds_charge_link=source==108?4:(source==106||source==110)?3:2;
         if(s->wilds_bridge_hold>=.60f)return wilds_charge(s,o,s->wilds_charge_link);
     }
@@ -659,7 +659,7 @@ static WDecision wilds_step(WState *s,const WObservation *o)
     }
     unsigned finish=frame>=(s->source==917?(s->red_foresight_chain?105:clip->frames-1):clip->recovery)||
         b->motion_finished;
-    if(s->source==918){
+    if(s->source==918&&!o->valor_style){
         enum { FORESIGHT_R_ROUND=1, FORESIGHT_R_STEP=2 };
         unsigned boosted=o->ascendance_active&&o->rank==3&&!o->valor;
         unsigned success=s->counter_success&&o->rank==3&&!o->valor;

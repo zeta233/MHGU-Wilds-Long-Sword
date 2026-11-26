@@ -15,6 +15,21 @@ fn main(){
     if shoulder_swap { println!("cargo:rustc-cfg=ml_swap_r_zr"); }
     let runtime=env::var("ML_RECOMP_RUNTIME");
     let switch_viewport=runtime.as_deref()==Ok("0");
+    let switch_no_overlay=env::var("ML_SWITCH_NO_OVERLAY").as_deref()==Ok("1");
+    let switch_native_focus_pose=env::var("ML_SWITCH_NATIVE_FOCUS_POSE").as_deref()==Ok("1");
+    let switch_guard_diagnostics=env::var("ML_SWITCH_GUARD_DIAGNOSTICS").as_deref()==Ok("1");
+    assert!(!switch_no_overlay||(switch_viewport&&combat),"Switch overlay fallback requires the Switch combat build");
+    assert!(!switch_native_focus_pose||switch_no_overlay,"Native Focus pose test requires the Switch overlay fallback");
+    println!("cargo:rerun-if-env-changed=ML_SWITCH_NO_OVERLAY");
+    println!("cargo:rustc-check-cfg=cfg(ml_switch_no_overlay)");
+    if switch_no_overlay { println!("cargo:rustc-cfg=ml_switch_no_overlay"); }
+    println!("cargo:rerun-if-env-changed=ML_SWITCH_NATIVE_FOCUS_POSE");
+    println!("cargo:rustc-check-cfg=cfg(ml_switch_native_focus_pose)");
+    if switch_native_focus_pose { println!("cargo:rustc-cfg=ml_switch_native_focus_pose"); }
+    assert!(!switch_guard_diagnostics||switch_native_focus_pose,"Switch guard diagnostics require native Focus poses");
+    println!("cargo:rerun-if-env-changed=ML_SWITCH_GUARD_DIAGNOSTICS");
+    println!("cargo:rustc-check-cfg=cfg(ml_switch_guard_diagnostics)");
+    if switch_guard_diagnostics { println!("cargo:rustc-cfg=ml_switch_guard_diagnostics"); }
     let recomp=!switch_viewport&&runtime.as_deref()!=Ok("android");
     println!("cargo:rerun-if-env-changed=ML_RECOMP_RUNTIME");
     println!("cargo:rustc-check-cfg=cfg(ml_recomp_runtime)");
@@ -79,6 +94,9 @@ fn main(){
             .arg(if recomp {"-DML_RECOMP_RUNTIME=1"} else {"-DML_RECOMP_RUNTIME=0"})
             .arg(if android {"-DML_ANDROID_RECOMP=1"} else {"-DML_ANDROID_RECOMP=0"})
             .arg(if switch_viewport {"-DML_SWITCH_VIEWPORT=1"} else {"-DML_SWITCH_VIEWPORT=0"})
+            .arg(if switch_no_overlay {"-DML_SWITCH_NO_OVERLAY=1"} else {"-DML_SWITCH_NO_OVERLAY=0"})
+            .arg(if switch_native_focus_pose {"-DML_SWITCH_NATIVE_FOCUS_POSE=1"} else {"-DML_SWITCH_NATIVE_FOCUS_POSE=0"})
+            .arg(if switch_guard_diagnostics {"-DML_SWITCH_GUARD_DIAGNOSTICS=1"} else {"-DML_SWITCH_GUARD_DIAGNOSTICS=0"})
             .arg(if ascendance {"-DML_ASCENDANCE_PROTOTYPE=1"} else {"-DML_ASCENDANCE_PROTOTYPE=0"})
             .arg(if any_style {"-DML_TEST_ANY_STYLE=1"} else {"-DML_TEST_ANY_STYLE=0"})
             .arg(if input_vm {"-DML_WORLD_INPUT_VM=1"} else {"-DML_WORLD_INPUT_VM=0"})
