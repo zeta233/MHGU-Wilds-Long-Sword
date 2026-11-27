@@ -425,6 +425,19 @@ static void valor_foresight_routes(void)
   assert(w_step(&s,&o).kind==W_KEEP&&!s.valor_foresight_r); /* Hit without a counter. */
  }
 }
+static void valor_radiance_bound_slots(void)
+{
+ WState s={0};WObservation o=obs();o.valor_style=o.valor=1;
+ assert(w_radiance_enter(&s,&o,W_SHEATHE).kind==W_KEEP);
+ assert(w_radiance_enter(&s,&o,W_SMALL).kind==W_KEEP);
+ assert(w_radiance_enter(&s,&o,W_BIG).kind==W_KEEP);
+ assert(w_valor_radiance_enter(&s,&o,239).kind==W_KEEP);
+ WDecision d=w_valor_radiance_enter(&s,&o,RADIANCE_FLASH_SLOT);
+ assert(d.move==W_BIG&&d.slot==RADIANCE_FLASH_SLOT&&!s.counter_success);
+ o.valor=0;
+ d=w_valor_radiance_enter(&s,&o,PURSUIT_FIRST_SLOT);
+ assert(d.move==W_SMALL&&d.slot==PURSUIT_FIRST_SLOT&&!s.counter_success);
+}
 static void valor_guard_recovery_routes(void)
 {
  for(unsigned action=108;action<=109;action++){
@@ -439,7 +452,17 @@ static void valor_guard_recovery_routes(void)
   WDecision d=w_step(&s,&o);
   assert(d.kind==W_ENTER&&d.move==W_CHIJIN&&d.source==W_CRIMSON_STATIONARY);
  }
- const unsigned seconds[]={116,136,138,140};
+ const unsigned alternate_requests[]={137,139,141};
+ for(unsigned i=0;i<sizeof(alternate_requests)/sizeof(*alternate_requests);i++){
+  WObservation o=obs();WState s={0};o.valor_style=o.valor=1;
+  o.base.native_action=alternate_requests[i];
+  assert(w_valor_second_action(o.state,o.base.native_action));
+  o.base.motion=0x5c2;o.base.animation_frame=55;
+  assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_THIRD).kind==W_KEEP);
+  o.base.motion=0x5b9;o.base.animation_frame=60;
+  assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_THIRD).kind==W_KEEP);
+ }
+ const unsigned seconds[]={116,135,136,138,140};
  for(unsigned i=0;i<sizeof(seconds)/sizeof(*seconds);i++){
   WObservation o=obs();WState s={0};o.valor_style=o.valor=1;
   o.base.native_action=seconds[i];o.base.motion=0x5b9;o.base.animation_frame=99;
@@ -486,6 +509,7 @@ int main(void){
  iai_held_entry();
  iai_thrust_priority();
  valor_foresight_routes();
+ valor_radiance_bound_slots();
  valor_guard_recovery_routes();
  WObservation o=obs();WState s={0};WDecision d;
  assert(w_wilds_enter(&s,&o,W_RELEASE).kind==W_KEEP);

@@ -407,9 +407,10 @@ static void big_counter_rank_reward(const WObservation *o,WDecision *d)
 }
 #endif
 
-static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned mask)
+static WDecision enter_move(WState *s,const WObservation *o,unsigned move,unsigned mask,unsigned valor_radiance)
 {
-    if((o->valor_style||o->valor)&&(move==W_SHEATHE||move==W_SMALL||move==W_BIG))return (WDecision){0};
+    if((o->valor_style||o->valor)&&!valor_radiance&&(move==W_SHEATHE||move==W_SMALL||move==W_BIG))
+        return (WDecision){0};
     /* Source down::exit bypasses settlement only for land (action0x5c).
      * Land starts weapon23a8=0.5; leaving that sequence settles immediately. */
     unsigned transfer=move==W_LAND&&((s->move==W_DOWN&&s->helm_cost_pending)||(s->move==W_AIR&&o->rank));
@@ -497,6 +498,10 @@ static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned ma
     if(transfer){s->helm_cost_pending=1;s->helm_cost_seconds=.5f;}
     return d;
 }
+static WDecision enter(WState *s,const WObservation *o,unsigned move,unsigned mask)
+{
+    return enter_move(s,o,move,mask,0);
+}
 WDecision w_debug_enter(WState *s,const WObservation *o,unsigned move){return enter(s,o,move,0);}
 #if ML_ASCENDANCE_PROTOTYPE
 WDecision w_dividing_spirit_attack(WState *s,const WObservation *o,unsigned keys)
@@ -510,6 +515,16 @@ WDecision w_dividing_sheathe(WState *s,const WObservation *o)
 WDecision w_radiance_enter(WState *s,const WObservation *o,unsigned move)
 {
     return enter(s,o,move,ML_X|ML_A);
+}
+#include "radiance_flash_data.h"
+#include "radiance_pursuit_data.h"
+WDecision w_valor_radiance_enter(WState *s,const WObservation *o,unsigned slot)
+{
+    if(!o->valor_style||!o->alive||!o->grounded||!o->drawn||!o->resources_ready||
+       (slot!=RADIANCE_FLASH_SLOT&&slot!=PURSUIT_FIRST_SLOT))return (WDecision){0};
+    WDecision d=enter_move(s,o,slot==RADIANCE_FLASH_SLOT?W_BIG:W_SMALL,0,1);
+    s->slot=d.slot=slot;
+    return d;
 }
 WDecision w_radiance_pursuit_enter(WState *s,const WObservation *o)
 {
@@ -601,10 +616,8 @@ WDecision w_valor_chain_release(WState *s,const WObservation *o,unsigned from)
         if(!w_valor_second_action(o->state,b->native_action)||b->motion!=0x5b9||b->animation_frame<38)
             return (WDecision){0};
     }else if(from==W_VALOR_RELEASE_THIRD){
-        if(!w_valor_third_action(o->state,b->native_action))return (WDecision){0};
-        unsigned ready=b->native_action==117?(b->motion==0x5ba&&b->animation_frame>=110):
-            (b->motion==0x5c2&&b->animation_frame>=50)||(b->motion==0x5b9&&b->animation_frame>=22);
-        if(!ready)return (WDecision){0};
+        if(!w_valor_third_action(o->state,b->native_action)||b->motion!=0x5ba||b->animation_frame<110)
+            return (WDecision){0};
     }else if(from==W_VALOR_RELEASE_TAIL){
         if((o->state!=1&&o->state!=2)||b->native_action>5)return (WDecision){0};
     }else return (WDecision){0};

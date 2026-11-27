@@ -54,7 +54,7 @@ typedef struct {
     unsigned kind,move,source,slot,native_action,heading;
     int rank_delta,gauge_delta;
     unsigned gauge_clear,gauge_fill,regen_seconds;
-    unsigned valor_gain,valor_foresight_second;
+    unsigned valor_gain,valor_foresight_second,valor_flash_second_press;
     unsigned red_recovery,counter_resheathe;
     unsigned motion_contract,crimson_direction,sheathed_roll;
     unsigned valor_slide,valor_slide_heading,valor_slide_input;
@@ -199,13 +199,19 @@ static inline unsigned w_valor_guard_reaction(unsigned state,unsigned action,uns
 {
     return state==16&&(action==108||action==109)&&motion==0x583;
 }
-static inline unsigned w_valor_second_action(unsigned state,unsigned action)
-{
-    return state==16&&(action==116||action==136||action==138||action==140);
-}
+enum { W_VALOR_GUARD_SECOND_ACTION=135 };
 static inline unsigned w_valor_third_action(unsigned state,unsigned action)
 {
-    return state==16&&(action==117||action==137||action==139||action==141);
+    return state==16&&action==117;
+}
+static inline unsigned w_valor_alternate_third_action(unsigned state,unsigned action)
+{
+    return state==16&&(action==137||action==139||action==141);
+}
+static inline unsigned w_valor_second_action(unsigned state,unsigned action)
+{
+    /* These native alternate III requests bind the same cut and recovery as II. */
+    return (state==16&&(action==116||(action>=W_VALOR_GUARD_SECOND_ACTION&&action<=141)));
 }
 enum { W_VALOR_RELEASE_SECOND=1,W_VALOR_RELEASE_THIRD,W_VALOR_RELEASE_TAIL };
 static inline unsigned w_spirit_one_crimson_source(unsigned state,unsigned action,unsigned motion)
@@ -256,6 +262,7 @@ WDecision w_dividing_spirit_attack(WState *s,const WObservation *o,unsigned keys
 WDecision w_dividing_sheathe(WState *s,const WObservation *o);
 WDecision w_radiance_enter(WState *s,const WObservation *o,unsigned move);
 WDecision w_radiance_pursuit_enter(WState *s,const WObservation *o);
+WDecision w_valor_radiance_enter(WState *s,const WObservation *o,unsigned slot);
 #endif
 WDecision w_step(WState *s,const WObservation *o);
 WDecision w_leave(WState *s);

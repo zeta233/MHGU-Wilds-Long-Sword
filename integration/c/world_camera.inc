@@ -68,20 +68,44 @@ static struct {
 } world_view_baseline;
 
 #if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE && ML_WORLD_PRESENTATION
+enum { W_RAD_VIEW_DRAW, W_RAD_VIEW_CONTACT, W_RAD_VIEW_FAN, W_RAD_VIEW_CUES };
+static struct {
+    void *actor;
+    unsigned area,active;
+    float born[W_RAD_VIEW_CUES];
+} world_radiance_view;
+
+static void world_radiance_view_cue(void *a,unsigned cue)
+{
+    unsigned area=byte(a,AREA);
+    if(world_radiance_view.actor!=a||world_radiance_view.area!=area){
+        world_radiance_view.actor=a;
+        world_radiance_view.area=area;
+        world_radiance_view.active=0;
+    }
+    world_radiance_view.born[cue]=world_elapsed;
+    world_radiance_view.active|=1u<<cue;
+}
+
 static float world_view_bound(float x,float limit)
 {
     return x>limit?limit:x< -limit?-limit:x;
 }
 
-static unsigned world_view_framing(void *a,const float delta[3],float radius,float shift[3])
+static unsigned world_view_framing(void *a,const float delta[3],float radius,float headroom,
+                                   float shift[3],float eye_shift[3])
 {
     unsigned focus=(ml_pad_raw_bits()&PAD_FOCUS)!=0;
     // A dispatch can change the route one frame before the motion layer
     // binds its replacement clip. Track the owned action across that handoff.
-    unsigned owned=!focus&&ascendance_owner(a)&&world.actor==(u32)(uptr)a&&
+    unsigned local=ascendance_owner(a)&&world.actor==(u32)(uptr)a&&
         u16(a,STATE)==16&&u16(a,ACTION)==w_action(world.move);
+    unsigned owned=!focus&&local;
+    unsigned bound=u16(a,MOTION)==0x500+world.slot;
     unsigned pursuit=owned&&((ascendance.radiance==RADIANCE_CHASE&&world.move==W_THRUST)||
-        (ascendance.radiance==RADIANCE_FOLLOW&&world.move==W_SMALL));
+        (ascendance.radiance==RADIANCE_FOLLOW&&world.move==W_SMALL&&
+        (world.slot==PURSUIT_FIRST_SLOT&&(!bound||radiance_pursuit.rewarded||real(a,FRAME)<19.f)||
+         world.slot==PURSUIT_SECOND_SLOT&&(!bound||real(a,FRAME)<PURSUIT_SECOND_HIT_END))));
     unsigned dash=owned&&((musou.phase==MUSOU_DASH&&world.move==W_BIG)||
         (musou.phase==MUSOU_CUT&&world.move==W_SMALL&&world.slot==40));
     float horizontal=att_sqrt(delta[0]*delta[0]+delta[2]*delta[2]);
@@ -101,7 +125,7 @@ static unsigned world_view_framing(void *a,const float delta[3],float radius,flo
         if(world_view_baseline.pursuit_frames<duration)world_view_baseline.pursuit_frames+=frames;
         float t=world_view_baseline.pursuit_frames/duration;
         if(t>1)t=1;
-        float blend=t*t*(3-2*t);
+        float blend=t*t*t*(10+t*(-15+6*t));
         float from=world_view_baseline.pursuit_from;
         world_view_baseline.pursuit_amount=from+(pursuit-from)*blend;
 
@@ -123,15 +147,65 @@ static unsigned world_view_framing(void *a,const float delta[3],float radius,flo
             if(world_view_baseline.musou_framing[i]<.05f&&world_view_baseline.musou_framing[i]>-.05f)
                 world_view_baseline.musou_framing[i]=0;
     }
-    // Adjust the view target only. The native eye, collision and orbit
-    // angles remain untouched, including at the edges of an area.
+    // The render eye can dip toward the hunter's height when the native
+    // camera has space. Leave its collision state and orbit angles intact.
     float amount=world_view_baseline.pursuit_amount;
+    float room=world_view_bound((radius-110.f)/160.f,1.f);
+    amount*=room>0?room:0;
+    float lower=world_view_bound(headroom-60.f,58.f);
+    float drop=lower>0?lower*amount:0;
     float side=world_view_bound(world_view_baseline.musou_framing[0]-55.f*amount,radius*.13f);
     float forward=world_view_bound(world_view_baseline.musou_framing[1],radius*.08f);
     shift[0]=(side*delta[2]+forward*delta[0])/horizontal;
-    shift[1]=(radius*.12f<58.f?radius*.12f:58.f)*amount;
+    shift[1]=8.f*amount;
     shift[2]=(forward*delta[2]-side*delta[0])/horizontal;
-    return side!=0||forward!=0||amount!=0;
+
+    float shake_x=0,shake_y=0,push=radius*.045f*amount;
+    unsigned radiance=local&&(ascendance.radiance==RADIANCE_FLASH||
+        ascendance.radiance==RADIANCE_CHASE||ascendance.radiance==RADIANCE_FOLLOW);
+    if(radiance&&world_radiance_view.actor==a&&world_radiance_view.area==byte(a,AREA)){
+        static const float duration[]={.30f,.16f,.34f};
+        static const float travel[]={58.f,0.f,28.f};
+        static const float shake[]={9.f,4.f,13.f};
+        for(unsigned cue=0;cue<W_RAD_VIEW_CUES;++cue){
+            if(!(world_radiance_view.active&(1u<<cue)))continue;
+            float t=(world_elapsed-world_radiance_view.born[cue])/duration[cue];
+            if(t<0||t>=1){
+                world_radiance_view.active&=~(1u<<cue);
+                continue;
+            }
+            float fade=1.f-t;
+            float envelope=ascendance_ease(t/.13f)*fade*fade;
+            unsigned phase=(unsigned)(65536.f*t*3.5f);
+            push+=travel[cue]*envelope;
+            shake_x+=shake[cue]*envelope*world_sin(phase);
+            shake_y+=shake[cue]*envelope*.60f*world_sin(phase+16384u);
+        }
+        if(ascendance.radiance==RADIANCE_FOLLOW&&world.slot==PURSUIT_FIRST_SLOT&&
+           radiance_pursuit.first_hit_hold>0){
+            float elapsed=PURSUIT_FIRST_HIT_HOLD-radiance_pursuit.first_hit_hold;
+            if(elapsed>=0&&elapsed<PURSUIT_FIRST_HIT_HOLD){
+                unsigned phase=(unsigned)(elapsed*65536.f*.29f);
+                float envelope=ascendance_ease(elapsed/3.f)*ascendance_ease(radiance_pursuit.first_hit_hold/4.f);
+                shake_x+=2.6f*envelope*world_sin(phase);
+                shake_y+=1.6f*envelope*world_sin(phase+16384u);
+            }
+        }
+    }
+    float clearance=room>0?room:0;
+    float push_ratio=world_view_bound(push/radius,.12f)*clearance;
+    if(delta[1]>0&&headroom-drop-delta[1]*push_ratio<55.f){
+        float safe=(headroom-drop-55.f)/delta[1];
+        push_ratio=safe>0?safe:0;
+    }
+    shake_x=world_view_bound(shake_x,14.f)*clearance;
+    shake_y=world_view_bound(shake_y,8.f)*clearance;
+    float x=shake_x*delta[2]/horizontal,z=-shake_x*delta[0]/horizontal;
+    eye_shift[0]=x-delta[0]*push_ratio;
+    eye_shift[1]=shake_y-drop-delta[1]*push_ratio;
+    eye_shift[2]=z-delta[2]*push_ratio;
+    shift[0]+=x;shift[1]+=shake_y;shift[2]+=z;
+    return side!=0||forward!=0||amount!=0||push_ratio!=0||shake_x!=0||shake_y!=0;
 }
 #endif
 
@@ -204,12 +278,15 @@ static u32 world_view(void *out,void *camera)
 #endif
     unsigned clamp_eye=limit>0&&distance>limit;
     float shift[3]={0,0,0};
+    float eye_shift[3]={0,0,0};
+    float ratio=clamp_eye?att_sqrt(limit/distance):1;
     unsigned frame_action=0;
 #if ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE && ML_WORLD_PRESENTATION
-    frame_action=world_view_framing(a,delta,att_sqrt(clamp_eye?limit:distance),shift);
+    float headroom=look[1]+delta[1]*ratio-real(a,0x44);
+    float ray[3]={delta[0]*ratio,delta[1]*ratio,delta[2]*ratio};
+    frame_action=world_view_framing(a,ray,att_sqrt(clamp_eye?limit:distance),headroom,shift,eye_shift);
 #endif
     if(!clamp_eye&&!frame_action)return world_original_view(out,camera);
-    float ratio=clamp_eye?att_sqrt(limit/distance):1;
     if(clamp_eye&&steady&&world_view_baseline.source!=world.source){
         world_view_baseline.source=world.source;
         log_event("world_steady_view",(u32)(uptr)a,world.source,(u32)att_sqrt(distance),(u32)att_sqrt(limit));
@@ -217,12 +294,12 @@ static u32 world_view(void *out,void *camera)
     /* Only the render matrix uses these offsets. Keep the native camera's
      * obstacle and aim state for the next update. */
     for(unsigned k=0;k<3;++k){
-        if(clamp_eye)set_real(camera,0x40+4*k,look[k]+delta[k]*ratio);
+        if(clamp_eye||eye_shift[k]!=0)set_real(camera,0x40+4*k,look[k]+delta[k]*ratio+eye_shift[k]);
         if(frame_action)set_real(camera,0x60+4*k,look[k]+shift[k]);
     }
     u32 result=world_original_view(out,camera);
     for(unsigned k=0;k<3;++k){
-        if(clamp_eye)set_real(camera,0x40+4*k,eye[k]);
+        if(clamp_eye||eye_shift[k]!=0)set_real(camera,0x40+4*k,eye[k]);
         if(frame_action)set_real(camera,0x60+4*k,look[k]);
     }
     return result;

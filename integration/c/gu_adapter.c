@@ -4,6 +4,8 @@
 #include "enhanced_sheathe_data.h"
 #include "radiance_flash_data.h"
 #include "radiance_pursuit_data.h"
+static float ascendance_pursuit_weapon_sample(float frame);
+static float ascendance_pursuit_handoff_sample(void);
 #include "radiance_pursuit_rates.h"
 #include "double_draw_data.h"
 #include "double_draw_grips.h"
@@ -245,10 +247,15 @@ static unsigned solo_ascendance_rt(void *a)
     return found;
 }
 
+static unsigned ascendance_uses_trigger(void *a)
+{
+    return hunter_style(a)==5||solo_ascendance_rt(a);
+}
+
 static unsigned ascendance_pad_bits(void *a)
 {
     unsigned raw=ml_pad_raw_bits();
-    if(solo_ascendance_rt(a))raw=(raw&~2u)|((raw&0x800u)?2u:0u);
+    if(ascendance_uses_trigger(a))raw=(raw&~2u)|((raw&0x800u)?2u:0u);
     return raw;
 }
 #endif
@@ -276,6 +283,31 @@ static NativeCall original_placement,original_equipment_motion;
  * state across our temporary source attachment, including the cache pointer.
  * Otherwise source312 frame34 reparents the last hand offset onto the back. */
 static struct {u32 object,owner,active,pose[12],previous,joint,kind,cache;} attachment_native[2];
+static unsigned attachment_clip_pose(u32 motion,float frame,u32 role,float *out,u32 *joint,u32 *closed)
+{
+    const MLAttachmentClip *clip=0;
+    for(u32 i=0;i<sizeof(ml_attachment_clips)/sizeof(*clip);++i)
+        if(ml_attachment_clips[i].slot==motion-0x500){clip=&ml_attachment_clips[i];break;}
+    if(!clip)return 0;
+    u32 n=(u32)frame;if(n>=clip->frames)n=clip->frames-1;
+    *closed=ml_attachment_weapon_motion[clip->offset+n]==0;
+    u32 selected=ml_attachment_selection[clip->offset+n][role-9];
+    if(!selected)return 0;
+    u32 next=n+1<clip->frames?n+1:n;
+    const float *x=ml_attachment_samples[clip->offset+n]+(selected-1)*7;
+    const float *y=ml_attachment_samples[clip->offset+next]+(selected-1)*7;
+    float frac=frame-(float)n;if(frac>1)frac=1;
+    for(u32 i=0;i<3;++i)out[i]=x[i]+(y[i]-x[i])*frac;
+    out[3]=0;float dot=0;
+    for(u32 i=3;i<7;++i)dot+=x[i]*y[i];
+    float sign=dot<0?-1:1,len2=0,len;
+    for(u32 i=3;i<7;++i){out[i+1]=x[i]+(sign*y[i]-x[i])*frac;len2+=out[i+1]*out[i+1];}
+    __asm__("vsqrt.f32 %0, %1":"=t"(len):"t"(len2));
+    if(!(len>0.00001f))return 0;
+    for(u32 i=4;i<8;++i)out[i]/=len;
+    out[8]=out[9]=out[10]=1;out[11]=0;*joint=selected==1?8:12;
+    return 1;
+}
 static unsigned attachment_pose(void *a,u32 role,float *out,u32 *joint,u32 *closed)
 {
     u32 motion=u16(a,MOTION);float frame=real(a,FRAME);
@@ -345,18 +377,13 @@ static unsigned attachment_pose(void *a,u32 role,float *out,u32 *joint,u32 *clos
     if((motion>>8)!=5||!(frame>=0&&frame<10000))return 0;
 #if ML_WILDS_MOVES
 #if ML_ASCENDANCE_PROTOTYPE
+    float handoff=-1.f;
     if(radiance_pursuit_pose(motion)){
         unsigned slot=motion-0x500;
+        if(radiance_pursuit_handoff_slot(slot))handoff=frame;
         motion=0x500+PURSUIT_WEAPON_SLOT;
         if(slot==PURSUIT_FIRST_SLOT)frame+=PURSUIT_FIRST_OFFSET;
-        else if(slot==PURSUIT_SECOND_SLOT){
-            /* The first cut still evaluates around donor F40-F41 when the
-             * second binds. Ease out of that grip and rejoin its track at F5. */
-            float start=PURSUIT_FIRST_OFFSET+PURSUIT_FIRST_BRANCH+1.5f;
-            float end=PURSUIT_SECOND_OFFSET+5.f;
-            float t=frame/5.f;
-            frame=t<1.f?start+(end-start)*t*t:frame+PURSUIT_SECOND_OFFSET;
-        }
+        else if(slot==PURSUIT_SECOND_SLOT)frame=ascendance_pursuit_weapon_sample(frame);
         else frame=PURSUIT_WEAPON_FRAME;
     }
     const MusouStroke *stroke=musou_clip(motion);
@@ -380,6 +407,21 @@ static unsigned attachment_pose(void *a,u32 role,float *out,u32 *joint,u32 *clos
                 wc->source==915?CHARGE_GRIP_MOVING:CHARGE_GRIP_FULL;
         }
         const float *x=weapon_samples[offset+n],*y=weapon_samples[offset+next];
+#if ML_ASCENDANCE_PROTOTYPE
+        float handoff_grip[7];
+        if(handoff>=0&&handoff<PURSUIT_HANDOFF_STEP){
+            float flash_pose[12];
+            u32 flash_joint,flash_closed;
+            if(attachment_clip_pose(0x500+RADIANCE_FLASH_DONOR,ascendance_pursuit_handoff_sample(),
+                                    role,flash_pose,&flash_joint,&flash_closed)&&flash_joint==12&&!flash_closed){
+                for(unsigned k=0;k<7;++k)handoff_grip[k]=flash_pose[k+(k>=3)];
+                y=x;
+                x=handoff_grip;
+                float progress=handoff/PURSUIT_HANDOFF_STEP;
+                t=progress*progress*(3.f-2.f*progress);
+            }
+        }
+#endif
         for(unsigned i=0;i<3;++i)out[i]=x[i]+(y[i]-x[i])*t;out[3]=0;
         float dot=0,length=0;for(unsigned i=3;i<7;++i)dot+=x[i]*y[i];
         for(unsigned i=0;i<4;++i){out[4+i]=x[3+i]+((dot<0?-1:1)*y[3+i]-x[3+i])*t;length+=out[4+i]*out[4+i];}
@@ -388,28 +430,7 @@ static unsigned attachment_pose(void *a,u32 role,float *out,u32 *joint,u32 *clos
         out[8]=out[9]=out[10]=1;out[11]=0;*joint=12;*closed=0;return 1;
     }
 #endif
-    const MLAttachmentClip *clip=0;
-    for(u32 i=0;i<sizeof(ml_attachment_clips)/sizeof(*clip);++i)
-        if(ml_attachment_clips[i].slot==motion-0x500){clip=&ml_attachment_clips[i];break;}
-    if(!clip)return 0;
-    u32 n=(u32)frame;if(n>=clip->frames)n=clip->frames-1;
-    *closed=ml_attachment_weapon_motion[clip->offset+n]==0;
-    u32 selected=ml_attachment_selection[clip->offset+n][role-9];
-    if(!selected)return 0;
-    u32 next=n+1<clip->frames?n+1:n;
-    const float *x=ml_attachment_samples[clip->offset+n]+(selected-1)*7;
-    const float *y=ml_attachment_samples[clip->offset+next]+(selected-1)*7;
-    float frac=frame-(float)n;if(frac>1)frac=1;
-    for(u32 i=0;i<3;++i)out[i]=x[i]+(y[i]-x[i])*frac;
-    out[3]=0;float dot=0;
-    for(u32 i=3;i<7;++i)dot+=x[i]*y[i];
-    float sign=dot<0?-1:1,len2=0,len;
-    for(u32 i=3;i<7;++i){out[i+1]=x[i]+(sign*y[i]-x[i])*frac;len2+=out[i+1]*out[i+1];}
-    __asm__("vsqrt.f32 %0, %1":"=t"(len):"t"(len2));
-    if(!(len>0.00001f))return 0;
-    for(u32 i=4;i<8;++i)out[i]/=len;
-    out[8]=out[9]=out[10]=1;out[11]=0;*joint=selected==1?8:12;
-    return 1;
+    return attachment_clip_pose(motion,frame,role,out,joint,closed);
 }
 /* During 312 the authored hand selector disappears at frame 34. Preserve
  * the evaluated equipment transform when crossing to the native back joint.
@@ -552,6 +573,52 @@ static unsigned enhanced_scabbard_pose(void *a,float *pose,u32 *joint,u32 *close
             for(unsigned i=4;i<8;++i)pose[i]*=inverse;
         }
     }
+    return 1;
+}
+
+static struct {void *actor,*scabbard;unsigned area;float start[7];} radiance_scabbard_transfer;
+static unsigned radiance_scabbard_pose(void *a,void *object,const float *back,float *pose,u32 *joint,u32 *closed)
+{
+    float frame=real(a,FRAME);
+    if(frame<RADIANCE_FLASH_HIT_BEGIN){
+        radiance_scabbard_transfer.actor=0;
+        return attachment_pose(a,10,pose,joint,closed);
+    }
+    if(!(frame>=0&&frame<10000&&back[8]>.01f&&back[9]>.01f&&back[10]>.01f))return 0;
+    /* The flash donor stops driving the left attachment at donor F20.
+     * Freeze the release in back-joint space so the rotating left hand
+     * cannot change the quaternion path after the item leaves the grip. */
+    float progress=(frame-RADIANCE_FLASH_HIT_BEGIN)/9.f;
+    if(progress<1.f&&(radiance_scabbard_transfer.actor!=a||radiance_scabbard_transfer.scabbard!=object||
+                      radiance_scabbard_transfer.area!=byte(a,AREA))){
+        float sample=radiance_flash_sample(frame);
+        if(sample>19.f)sample=19.f;
+        if(!attachment_clip_pose(0x500+RADIANCE_FLASH_DONOR,sample,10,pose,joint,closed)||*joint!=8)return 0;
+        const float *(*matrix)(void *,u32)=(const float *(*)(void *,u32))(*(uptr **)a)[0x54/4];
+        float relative[7],point[3];
+        if(!attachment_relative_pose(matrix(a,2),matrix(a,8),relative))return 0;
+        attachment_rotate(relative+3,pose,point);
+        attachment_multiply(relative+3,pose+4,radiance_scabbard_transfer.start+3);
+        for(unsigned i=0;i<3;++i)radiance_scabbard_transfer.start[i]=relative[i]+point[i];
+        radiance_scabbard_transfer.actor=a;
+        radiance_scabbard_transfer.scabbard=object;
+        radiance_scabbard_transfer.area=byte(a,AREA);
+    }
+    for(unsigned i=0;i<12;++i)pose[i]=back[i];
+    if(progress<1.f){
+        const float *start=radiance_scabbard_transfer.start;
+        float t=progress*progress*(3.f-2.f*progress),dot=0,norm=0;
+        for(unsigned i=0;i<3;++i)pose[i]=(1.f-t)*start[i]+t*back[i];
+        for(unsigned i=0;i<4;++i)dot+=start[3+i]*back[4+i];
+        for(unsigned i=0;i<4;++i){
+            pose[4+i]=(1.f-t)*start[3+i]+(dot<0?-t:t)*back[4+i];
+            norm+=pose[4+i]*pose[4+i];
+        }
+        if(!(norm>.00001f))return 0;
+        norm=att_sqrt(norm);
+        for(unsigned i=4;i<8;++i)pose[i]/=norm;
+    }
+    *joint=2;*closed=1;
     return 1;
 }
 
@@ -1068,6 +1135,8 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
 #endif
 #if ML_ASCENDANCE_PROTOTYPE
     unsigned enhanced_sheathe=motion==0x500+ENHANCED_SHEATHE_SLOT;
+    unsigned flash=motion==0x500+RADIANCE_FLASH_SLOT;
+    unsigned pursuit=radiance_pursuit_pose(motion);
     if(enhanced_sheathe)*(uint16_t *)((uptr)a+MOTION)=0x500+RADIANCE_HOLD_SLOT;
 #endif
     /* The sheathed tails use the model's native stowed placement. */
@@ -1080,14 +1149,14 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
 #if ML_WILDS_MOVES
     private_pose=focus_walk_clip(motion)!=0;
 #if ML_ASCENDANCE_PROTOTYPE
-    private_pose|=dividing_slot(motion-0x500)||musou_clip(motion)!=0||radiance_pursuit_pose(motion)||musou_entry_slot(motion-0x500);
+    private_pose|=dividing_slot(motion-0x500)||musou_clip(motion)!=0||pursuit||musou_entry_slot(motion-0x500);
 #endif
     for(unsigned i=0;!private_pose&&i<sizeof(wilds_clips)/sizeof(*wilds_clips);++i)
         private_pose=motion==0x500+wilds_clips[i].slot;
 #endif
     if(!private_pose&&!round_seat
 #if ML_ASCENDANCE_PROTOTYPE
-       &&!musou_stance_motion(motion)&&motion!=0x500+32&&motion!=0x500+41&&!enhanced_sheathe&&!double_draw_motion(motion)
+       &&!musou_stance_motion(motion)&&motion!=0x500+32&&motion!=0x500+41&&!enhanced_sheathe&&!flash&&!double_draw_motion(motion)
 #endif
        &&(role==10||!(byte(a,DRAWN)&1))&&
        word(object,0x13cc)==2&&word(object,0x13d4)==2&&word(object,0x1408)&&
@@ -1096,12 +1165,13 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
         for(unsigned i=0;i<12;++i)back_rest[ix].pose[i]=real(object,0x40+4*i);
     }
 #if ML_ASCENDANCE_PROTOTYPE
-    if(scabbard&&!round_scabbard&&!musou_stance_motion(motion)&&motion!=0x500+32&&motion!=0x500+41&&!double_draw_motion(motion)&&motion!=0x500+230&&motion!=0x500+RADIANCE_WALK_SLOT&&motion!=0x500+ENHANCED_SHEATHE_SLOT)return result;
+    if(scabbard&&!round_scabbard&&!flash&&!pursuit&&!musou_stance_motion(motion)&&motion!=0x500+32&&motion!=0x500+41&&!double_draw_motion(motion)&&motion!=0x500+230&&motion!=0x500+RADIANCE_WALK_SLOT&&motion!=0x500+ENHANCED_SHEATHE_SLOT)return result;
 #else
     if(scabbard&&!round_scabbard&&motion!=0x500+230)return result;
 #endif
-    unsigned wilds_back=private_pose&&role==10&&back_rest[1].owner==a&&
+    unsigned native_back=role==10&&back_rest[1].owner==a&&
         back_rest[1].epoch==byte(a,AREA)&&back_rest[1].model==(u32)(uptr)object;
+    unsigned wilds_back=private_pose&&native_back;
     /* Some GU scabbards have separate drawn and stowed back mounts.
      * Reach the stowed mount before the blade starts sliding in at F74. */
     if(round_scabbard&&(!wilds_back||word(object,0x13cc)!=2||
@@ -1131,6 +1201,8 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
     unsigned posed;
 #if ML_ASCENDANCE_PROTOTYPE
     if(enhanced_sheathe&&role==10)posed=enhanced_scabbard_pose(a,pose,&joint,&closed);
+    else if(flash&&native_back)
+        posed=radiance_scabbard_pose(a,object,back_rest[1].pose,pose,&joint,&closed);
     else
 #endif
     posed=!round_seat&&(wilds_back||attachment_pose(a,role,pose,&joint,&closed));
@@ -1342,7 +1414,7 @@ static MLObservation observe(void *a,unsigned direction)
     o.native_action=u16(a,ACTION);o.motion=u16(a,MOTION);o.phase=byte(a,5);
     o.held=held;
 #if ML_ASCENDANCE_PROTOTYPE
-    if((o.held&ML_ZR)&&solo_ascendance_rt(a))o.held&=~ML_ZR;
+    if((o.held&ML_ZR)&&ascendance_uses_trigger(a))o.held&=~ML_ZR;
 #endif
     o.gauge=word(a,0x2780);o.heading=u16(a,HEADING);o.input_heading=o.heading;
     o.animation_frame=real(a,FRAME);o.simulation_delta=real(a,0x1c);
@@ -1360,9 +1432,21 @@ static MLObservation observe(void *a,unsigned direction)
 #endif
 static u32 request_hook(void *a,u32 state,u32 action,u32 flags)
 {
-    if(!installed||submitting||!local_supported(a))return original_request(a,state,action,flags);
+    if(!installed||!local_supported(a))return original_request(a,state,action,flags);
     /* Requests can precede the post-poll hook. Refresh bits without adding
      * another simulation sample or advancing any buffered-key timer. */
+#if ML_WORLD_COMBAT && ML_WILDS_MOVES
+    valor_guard_sync(a);
+    /* A queued native follow can re-enter through the submitting path. */
+    if((w_valor_third_action(state,action)||w_valor_alternate_third_action(state,action))&&
+       (valor_guard_second(a)||(valor_release_link.actor==a&&
+        valor_release_link.stage==W_VALOR_RELEASE_SECOND))){
+        ml_pad_read();
+        MLObservation raw=observe(a,0);
+        if(valor_release_input(a,&raw,0))return 0;
+    }
+#endif
+    if(submitting)return original_request(a,state,action,flags);
     ml_pad_read();
 #if ML_WORLD_COMBAT
     if(world_request(a,state,action,flags))return 0;
@@ -1602,8 +1686,15 @@ u32 ml_install(u32 base)
     const u32 expected[]={0x11998b0,0x2cbfcc,0x2e5810,0x2a1d8c,0x119f7a0};
     for(u32 i=0;i<5;++i)
         if(!native_guard(VT+offsets[i],vt[offsets[i]/4],main_base+expected[i]))return 0;
-    if(!native_guard(0x2ab670,*(u32 *)(main_base+0x2ab670),0xe92d47f0u)||
-       !native_guard(0x2ab674,*(u32 *)(main_base+0x2ab674),0xe24dd018u))return 0;
+    const u32 *action_entry=(const u32 *)(main_base+0x2ab670);
+#if ML_SWITCH_GUARD_DIAGNOSTICS
+    if(action_entry[0]==0xe51ff004u){
+        extern void ml_switch_action_redirect(u32);
+        ml_switch_action_redirect(action_entry[1]);
+    }
+#endif
+    if(!native_guard(0x2ab670,action_entry[0],0xe92d47f0u)||
+       !native_guard(0x2ab674,action_entry[1],0xe24dd018u))return 0;
 #if ML_ATTACHMENT_PREVIEW || ML_WORLD_COMBAT
     if(!native_guard(0x3078b8,*(u32 *)(main_base+0x3078b8),0xe92d4bf0u)||
        !native_guard(0x3078bc,*(u32 *)(main_base+0x3078bc),0xe28db018u)||

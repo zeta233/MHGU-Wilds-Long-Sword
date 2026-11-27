@@ -1,5 +1,6 @@
 use std::{env,path::PathBuf,process::Command};
 fn main(){
+    println!("cargo:rerun-if-env-changed=ML_PACKAGE_VERSION");
     let dir=env::var("CARGO_MANIFEST_DIR").unwrap();
     let out=PathBuf::from(env::var("OUT_DIR").unwrap());
     let gcc=env::var("ARM_GCC").unwrap_or_else(|_|"arm-none-eabi-gcc".into());
@@ -79,6 +80,9 @@ fn main(){
     println!("cargo:rustc-check-cfg=cfg(ml_attachment_preview)");
     if preview { println!("cargo:rustc-cfg=ml_animation_preview"); }
     if attachments { println!("cargo:rustc-cfg=ml_attachment_preview"); }
+    let offset_test=env::var("ML_OFFSET_ALWAYS_STAGGER").as_deref()==Ok("1");
+    assert!(!offset_test||ascendance,"Offset test requires Ascendance");
+    println!("cargo:rerun-if-env-changed=ML_OFFSET_ALWAYS_STAGGER");
     let art_fixture=env::var("ML_ART_FIXTURE").as_deref()==Ok("1");
     println!("cargo:rerun-if-env-changed=ML_ART_FIXTURE");
     let trace_events=env::var("ML_TRACE_EVENTS").as_deref()==Ok("1");
@@ -103,6 +107,7 @@ fn main(){
             .arg(if audio_probe {"-DML_WORLD_AUDIO_PROBE=1"} else {"-DML_WORLD_AUDIO_PROBE=0"})
             .arg(if fx_probe {"-DML_WORLD_FX_PROBE=1"} else {"-DML_WORLD_FX_PROBE=0"})
             .arg(if presentation {"-DML_WORLD_PRESENTATION=1"} else {"-DML_WORLD_PRESENTATION=0"})
+            .arg(if offset_test {"-DML_OFFSET_ALWAYS_STAGGER=1"} else {"-DML_OFFSET_ALWAYS_STAGGER=0"})
             .arg(if art_fixture {"-DML_ART_FIXTURE=1"} else {"-DML_ART_FIXTURE=0"})
             .arg(if trace_events {"-DML_TRACE_EVENTS=1"} else {"-DML_TRACE_EVENTS=0"})
             .arg(format!("-I{dir}/motion-headers"))

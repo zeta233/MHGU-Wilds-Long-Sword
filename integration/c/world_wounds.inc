@@ -21,52 +21,20 @@ static WMonsterWounds wilds_wounds[WOUND_MONSTERS];
 static unsigned wilds_wound_owner,wilds_wound_zone;
 static struct {
     void *target,*status;
-    unsigned area,region;
-    float until;
-} wound_recoil;
-static struct {
-    void *target,*status;
     unsigned actor,area,id,slot,region,bonus;
 } focus_burst;
+static struct {
+    void *target,*status;
+    unsigned actor,area,slot,blocked,pending,deflected_region;
+} wound_execution;
 static int (*world_original_monster_reaction)(void *);
 static int (*world_original_monster_action)(void *,unsigned,unsigned,unsigned);
 static struct {
     void *target,*status;
-    unsigned actor,area,action,resting;
-} focus_stagger;
+    unsigned area,action,blocked_attack;
+    float started,until,extra;
+} monster_recovery[WOUND_MONSTERS];
 
-static void world_focus_stagger_release(void)
-{
-    if(focus_stagger.target)
-        log_event("wilds_focus_stagger_end",(u32)(uptr)focus_stagger.target,world.source,
-            focus_stagger.resting,(u32)(world_elapsed*1000));
-    focus_stagger.target=0;
-}
-
-static int world_monster_action(void *target,unsigned group,unsigned action,unsigned mode)
-{
-    if(target==focus_stagger.target&&world.move==W_FOCUS&&world.wilds_focus_break&&
-       focus_stagger.actor==world.actor&&world.epoch==focus_stagger.area&&
-       byte(target,AREA)==focus_stagger.area&&word(target,0x1428)==(u32)(uptr)focus_stagger.status&&
-       (int)word(focus_stagger.status,0x370)>0&&u16(target,0x73e0)==focus_stagger.action&&group<10&&
-       (mode==0||mode==2||mode==5)){
-        if(focus_stagger.resting)return 0;
-        /* GU's common idle selector (75224) uses 0:2 for species with
-         * the fatigue idle capability, otherwise 0:1 or 0:0. Enter the
-         * animation without changing the monster's actual stamina. */
-        unsigned idle=(byte(focus_stagger.status,0x1a8)&0x40)?2:
-            byte(focus_stagger.status,0x2c0)==1?1:0;
-        int result=world_original_monster_action(target,0,idle,2);
-        unsigned next=u16(target,0x73e0);
-        if((next&255)==0){
-            focus_stagger.action=next;focus_stagger.resting=1;
-            log_event("wilds_focus_stagger_breathe",(u32)(uptr)target,world.source,next,
-                (u32)(world_elapsed*1000));
-        }
-        return result;
-    }
-    return world_original_monster_action(target,group,action,mode);
-}
 extern void ml_wilds_wound(unsigned,unsigned,unsigned);
 
 static void world_wound_owner(void *a)
@@ -74,50 +42,195 @@ static void world_wound_owner(void *a)
     unsigned area=byte(a,AREA);
     if(wilds_wound_owner!=(u32)(uptr)a||(area==0&&wilds_wound_zone!=0)){
         for(unsigned i=0;i<WOUND_MONSTERS;++i)wilds_wounds[i]=(WMonsterWounds){0};
-        wound_recoil.target=0;
+        wound_execution.target=0;
+        for(unsigned i=0;i<WOUND_MONSTERS;++i)monster_recovery[i].target=0;
         wilds_wound_owner=(u32)(uptr)a;
     }
     wilds_wound_zone=area;
 }
 
+static void world_end_wound_execution(void)
+{
+    if(wound_execution.target)
+        log_event("wilds_wound_hold_end",(u32)(uptr)wound_execution.target,
+            wound_execution.actor,(u32)(world_elapsed*1000),0);
+    wound_execution.target=0;
+}
+
+static unsigned world_wound_holds_action(void *target,void *status,unsigned group,unsigned action)
+{
+    if(target!=wound_execution.target)return 0;
+    void *actor=(void *)(uptr)wound_execution.actor;
+    unsigned area=wound_execution.area;
+    if(status!=wound_execution.status||!status||byte(target,AREA)!=area||
+       world.actor!=wound_execution.actor||byte(actor,AREA)!=area||
+       world.move!=W_FOCUS||!world.wilds_focus_break||
+       u16(actor,STATE)!=16||u16(actor,ACTION)!=w_action(W_FOCUS)||
+       (int)word(status,0x370)<=0){
+        world_end_wound_execution();
+        return 0;
+    }
+    /* The monster can finish its native recoil or enter a stronger
+     * reaction. Its normal AI cannot resume until the finisher exits. */
+    if(!group||group>=10)return 0;
+    if(!wound_execution.blocked){
+        wound_execution.blocked=1;
+        log_event("wilds_wound_hold",(u32)(uptr)target,world.source,
+            (group<<8)|action,(u32)real(actor,FRAME));
+    }
+    return 1;
+}
+
+/* Keep the native stagger animation and give grounded reactions a short
+ * recovery before the monster can attack. Wilds ground clips sampled at
+ * 60 Hz start at 290 frames for Offset and 250 for wound destruction.
+ * Cap the added time so a short or interrupted GU clip does not leave a
+ * monster in an extended idle pose. */
+static void world_start_monster_recovery(void *target,void *status,unsigned action,unsigned offset)
+{
+    if(!world_original_monster_action||(action&255)!=10||(action>>8)>=13)return;
+    unsigned uid=byte(status,0x1b5);
+    if(uid>=WOUND_MONSTERS||world_monster(uid)!=target)return;
+    monster_recovery[uid]=(__typeof__(monster_recovery[uid])){
+        target,status,byte(target,AREA),action,0,world_elapsed,
+        world_elapsed+(offset?290.f:250.f)/60.f,offset?1.5f:1.25f
+    };
+}
+
+static int world_monster_action(void *target,unsigned group,unsigned action,unsigned mode)
+{
+    void *status=(void *)(uptr)word(target,0x1428);
+    if(world_wound_holds_action(target,status,group,action))return 0;
+    unsigned uid=status?byte(status,0x1b5):WOUND_MONSTERS;
+    if(uid>=WOUND_MONSTERS||target!=monster_recovery[uid].target)
+        return world_original_monster_action(target,group,action,mode);
+    __typeof__(monster_recovery[0]) *r=monster_recovery+uid;
+    unsigned before=u16(target,0x73e0);
+    if(status!=r->status||byte(target,AREA)!=r->area||r->area!=wilds_wound_zone||
+       (int)word(status,0x370)<=0||world_elapsed>=r->until||
+       ((before&255)>=10&&before!=r->action)){
+        r->target=0;
+    }else if(group==7&&mode==0&&before!=r->action){
+        if(!r->blocked_attack){
+            r->blocked_attack=1;
+            log_event("world_reaction_attack_wait",(u32)(uptr)target,before,action,
+                (u32)((r->until-world_elapsed)*1000));
+        }
+        return 0;
+    }
+    int result=world_original_monster_action(target,group,action,mode);
+    unsigned after=u16(target,0x73e0);
+    if(r->target&&before==r->action&&after!=before){
+        if((after&255)!=0&&(after&255)!=1){
+            r->target=0;
+        }else{
+            float limit=world_elapsed+r->extra;
+            if(limit<r->until)r->until=limit;
+            log_event("world_reaction_recovery",(u32)(uptr)target,before,
+                (u32)((world_elapsed-r->started)*1000),(u32)((r->until-world_elapsed)*1000));
+        }
+    }
+    return result;
+}
+
+/* Ask GU's damage dispatcher for a species- and part-specific heavy
+ * reaction. Its action state machine owns recovery and stronger reactions. */
+static int world_request_part_reaction(void *target,void *status,unsigned region,unsigned kind)
+{
+    uint16_t *reaction=(uint16_t *)((uptr)status+0x3ae);
+    unsigned char *part=(unsigned char *)((uptr)status+0x3b2),previous=*part;
+    *part=(unsigned char)region;
+    *reaction=(uint16_t)kind;
+    int result=world_original_monster_reaction(target);
+    *reaction=0;
+    *part=previous;
+    return result;
+}
+
+static int world_request_heavy_reaction(void *target,void *status,unsigned region)
+{
+    return world_request_part_reaction(target,status,region,3);
+}
+
+static void world_abort_wound_execution(void *actor)
+{
+    void *target=wound_execution.target,*status=wound_execution.status;
+    unsigned pending=wound_execution.pending,region=wound_execution.deflected_region;
+    world_end_wound_execution();
+    if(!target||!status||!pending||wound_execution.actor!=(u32)(uptr)actor||
+       byte(actor,AREA)!=wound_execution.area||
+       world_monster(wound_execution.slot)!=target||word(target,0x1428)!=(uptr)status||
+       byte(target,AREA)!=wound_execution.area||(int)word(status,0x370)<=0||
+       u16(status,0x3ae)||(u16(target,0x73e0)&255)>=10)return;
+    world_request_part_reaction(target,status,region,pending);
+}
+
 static int world_monster_reaction(void *target)
 {
-    if(target!=wound_recoil.target){
+    if(target==wound_execution.target&&focus_burst.target==target&&
+       world.move==W_FOCUS&&world.wilds_focus_break){
+        void *status=(void *)(uptr)word(target,0x1428);
+        if(status&&status==wound_execution.status&&byte(target,AREA)==wound_execution.area&&
+           (int)word(status,0x370)>0){
+            unsigned pending=u16(status,0x3ae);
+            /* These native flinches displace the target between blade windows.
+             * Preserve the strongest request for the end of the execution. */
+            if(pending&&pending<=3){
+                if(pending>=wound_execution.pending){
+                    wound_execution.pending=pending;
+                    wound_execution.deflected_region=byte(status,0x3b2);
+                }
+                *(uint16_t *)((uptr)status+0x3ae)=0;
+                return 0;
+            }
+        }
+    }
 #if ML_ASCENDANCE_PROTOTYPE
         unsigned pending=ascendance_reaction_before(target);
         unsigned before=pending?u16(target,0x73e0):0;
+        if(ascendance_independent_flash()){
+            if(pending!=2)return world_original_monster_reaction(target);
+#if ML_OFFSET_ALWAYS_STAGGER
+            /* An ongoing stagger or a native knockdown already meets the
+             * test condition. Death and capture still belong to GU. */
+            unsigned group=before&255;
+            if(group==10||group==11||u16(radiance_pursuit.status,0x3ae)){
+                int result=world_original_monster_reaction(target);
+                ascendance_reaction_after(target,pending,before);
+                return result;
+            }
+#endif
+            if((before&255)>=10)return world_original_monster_reaction(target);
+            int result=world_request_heavy_reaction(target,radiance_pursuit.status,radiance_pursuit.region);
+            if(result){
+                ascendance_reaction_after(target,pending,before);
+                if(radiance_pursuit.confirmed)
+                    world_start_monster_recovery(target,radiance_pursuit.status,u16(target,0x73e0),1);
+            }
+            return result;
+        }
         int result=world_original_monster_reaction(target);
         if(result&&pending)ascendance_reaction_after(target,pending,before);
         return result;
 #else
         return world_original_monster_reaction(target);
 #endif
-    }
-    wound_recoil.target=0;
-    void *status=(void *)(uptr)word(target,0x1428);
-    if(status!=wound_recoil.status||byte(target,AREA)!=wound_recoil.area||
-       world_elapsed>wound_recoil.until||(int)word(status,0x370)<=0)
-        return world_original_monster_reaction(target);
-    /* Play GU's short, species-aware recoil before the protected idle.
-     * An existing stronger reaction, knockdown or capture takes priority. */
+}
+
+static void world_finish_wound_recoil(void *target,void *status,unsigned region)
+{
+    if((int)word(status,0x370)<=0)return;
     unsigned before=u16(target,0x73e0),pending=u16(status,0x3ae);
-    int result;
-    if((pending&&pending!=2)||(before&255)==10||(before&255)==11||(before&255)>=14){
-        result=world_original_monster_reaction(target);
-    }else{
-        uint16_t *reaction=(uint16_t *)((uptr)status+0x3ae);
-        unsigned char *region=(unsigned char *)((uptr)status+0x3b2),previous=*region;
-        *region=(unsigned char)wound_recoil.region;*reaction=2;
-        result=world_original_monster_reaction(target);
-        *reaction=0;*region=previous;
-    }
+    unsigned group=before&255;
+    if(group==10||group==11||group>=14||pending>3)return;
+    if(wound_execution.pending>=3&&pending<3)region=wound_execution.deflected_region;
+    if(pending==3)world_original_monster_reaction(target);
+    else world_request_heavy_reaction(target,status,region);
     unsigned action=u16(target,0x73e0);
-    if(world_original_monster_action&&(action&255)==10){
-        focus_stagger.target=target;focus_stagger.status=status;focus_stagger.actor=world.actor;
-        focus_stagger.area=wound_recoil.area;focus_stagger.action=action;focus_stagger.resting=0;
-        log_event("wilds_wound_recoil",(u32)(uptr)target,wound_recoil.region,before,action);
+    if(before!=action&&((action&255)==10||(action&255)==11)){
+        world_start_monster_recovery(target,status,action,0);
+        log_event("wilds_wound_recoil",(u32)(uptr)target,region,before,action);
     }
-    return result;
 }
 
 static unsigned world_wound_slot(const void *registry,const void *target)
@@ -218,6 +331,8 @@ static void world_finish_focus_burst(void *actor,float frame)
         world_helm_impact(actor,&pos.x);
 #endif
     log_event("wilds_wound_burst",region,world.source,bonus,w->burst_damage);
+    world_finish_wound_recoil(target,status,region);
+    wound_execution.pending=0;
 }
 
 static void world_monster_wound_damage(void *manager,void *attack,void *target,void *point,
@@ -293,8 +408,9 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
         focus_burst.target=target;focus_burst.status=status;focus_burst.slot=slot;
         focus_burst.actor=world.actor;focus_burst.area=byte(target,AREA);
         focus_burst.id=id;focus_burst.region=region;focus_burst.bonus=bonus;
-        wound_recoil.target=target;wound_recoil.status=status;wound_recoil.area=byte(target,AREA);
-        wound_recoil.region=region;wound_recoil.until=world_elapsed+.25f;
+        wound_execution=(__typeof__(wound_execution)){
+            .target=target,.status=status,.actor=world.actor,.area=byte(target,AREA),.slot=slot
+        };
 #if ML_WORLD_PRESENTATION
         world_helm_impact(actor,(const float *)point);
 #endif

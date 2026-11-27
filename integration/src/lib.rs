@@ -12,6 +12,11 @@ unsafe extern "C" {fn ml_install(base:u32)->u32;fn ml_pad_refresh();}
 extern "C" fn ml_startup_guard(offset:u32, observed:u32, expected:u32) {
     error!("[ml-rebuild] startup guard at main+{offset:#010x}: found {observed:#010x}, expected {expected:#010x}");
 }
+#[cfg(ml_switch_guard_diagnostics)]
+#[unsafe(no_mangle)]
+extern "C" fn ml_switch_action_redirect(destination: u32) {
+    error!("[ml-rebuild] action request already redirected; existing destination={destination:#010x}");
+}
 #[cfg(ml_switch_viewport)]
 #[unsafe(no_mangle)]
 extern "C" fn ml_shared_damage_hook(offset:u32) {
@@ -42,6 +47,11 @@ fn sample_pad(object:u32)->u32{
 #[forge::entry]
 fn main(){
     let base=forge::mem::text_addr();
+    if let Some(version) = option_env!("ML_PACKAGE_VERSION") {
+        info!("[ml-rebuild] package {version}");
+    }
+    #[cfg(ml_switch_guard_diagnostics)]
+    info!("[ml-rebuild] Switch diagnostic variant; checking native action entry before activation");
     #[cfg(all(not(ml_animation_preview),not(ml_world_combat)))]
     info!("[ml-rebuild] build=rebuild-b4 native_thrust_transitions=1 legacy_assets=0 scope=fade_step");
     #[cfg(ml_world_combat)]
@@ -189,9 +199,20 @@ fn draw_gauge_glow() {
         let broken = kind >= 2;
         let radius = if broken { 20.0 } else { 13.0 };
         let center = ImVec2::new(x, y);
-        let (r, g, b) = if broken { (255, 185, 78) } else { (207, 42, 25) };
+        let (r, g, b) = if broken { (255, 185, 78) } else { (246, 86, 51) };
         for (size, opacity) in [(1.0, 7), (0.83, 10), (0.66, 13), (0.5, 16), (0.34, 19)] {
             dl.add_circle_filled(center, radius * size * scale, color(r, g, b, opacity), 20);
+        }
+        if !broken {
+            let point = |dx: f32, dy: f32| ImVec2::new(x + dx * scale, y + dy * scale);
+            let crack = [((-6.0, -5.5), (-2.0, -2.0)), ((-2.0, -2.0), (1.0, -3.0)),
+                ((1.0, -3.0), (2.0, 1.5)), ((2.0, 1.5), (6.0, 4.5)),
+                ((2.0, 1.5), (-1.0, 5.5))];
+            for (tint, width) in [(color(32, 15, 23, 235), 3.7), (color(255, 245, 203, 255), 1.5)] {
+                for &((x1, y1), (x2, y2)) in &crack {
+                    dl.add_line(point(x1, y1), point(x2, y2), tint, width * scale);
+                }
+            }
         }
         let mut amount = (wound >> 32) as u32;
         if broken && amount > 0 {

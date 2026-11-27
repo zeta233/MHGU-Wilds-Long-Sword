@@ -138,6 +138,14 @@ static void pursuit_musou_bridge_begin(void *a)
 }
 
 static struct { void *actor; unsigned area,sample; } pursuit_cut_bridge;
+static struct { void *actor; unsigned area,sample; } pursuit_flash_bridge;
+
+static void pursuit_flash_bridge_begin(void *a)
+{
+    pursuit_flash_bridge.actor=a;
+    pursuit_flash_bridge.area=byte(a,AREA);
+    pursuit_flash_bridge.sample=sample_sequence;
+}
 
 static void pursuit_cut_bridge_begin(void *a)
 {
@@ -179,13 +187,16 @@ static u32 step_round_pair(u32 manager,void *a,void *hunter_vector,void *monster
     unsigned cut_bridge=a==pursuit_cut_bridge.actor&&byte(a,AREA)==pursuit_cut_bridge.area&&
         sample_sequence-pursuit_cut_bridge.sample<=2&&u16(a,STATE)==16&&
         world.slot==PURSUIT_SECOND_SLOT&&u16(a,MOTION)==0x500+PURSUIT_FIRST_SLOT;
-    if(weight>=1&&!round&&!cut_bridge&&!settle)
+    unsigned flash_bridge=a==pursuit_flash_bridge.actor&&byte(a,AREA)==pursuit_flash_bridge.area&&
+        sample_sequence-pursuit_flash_bridge.sample<=3&&u16(a,STATE)==16&&
+        radiance_pursuit_handoff_slot(world.slot);
+    if(weight>=1&&!round&&!cut_bridge&&!flash_bridge&&!settle)
         return step_round_original_pair(manager,a,hunter_vector,monster,monster_vector);
 
     float x=real(a,0x1040),z=real(a,0x1048);
     u32 result=step_round_original_pair(manager,a,hunter_vector,monster,monster_vector);
     float dx=real(a,0x1040)-x,dz=real(a,0x1048)-z;
-    if(cut_bridge){
+    if(cut_bridge||flash_bridge){
         float total_x=x+dx,total_z=z+dz;
         float squared=total_x*total_x+total_z*total_z;
         const float limit=15.f;

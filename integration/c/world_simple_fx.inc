@@ -318,7 +318,6 @@ static void world_fx_tick(void *a)
             if(blade){
                 for(unsigned k=0;k<3;++k)point[k]=blade[12+k]+blade[8+k]*70;
                 world_sfx_seen|=1u<<20;
-                world_sfx_oriented(a,point,0x3f61,blade);
                 world_sfx_emit(a,point,0x3f60);
                 log_event("radiance_flash_cut_fx",(u32)(uptr)a,(u32)(1000*frame),bind_generation,0);
 #if ML_WILDS_MOVES
@@ -328,6 +327,9 @@ static void world_fx_tick(void *a)
         }
         return;
     }
+#if ML_WILDS_MOVES
+    world_radiance_sheath_fx(a);
+#endif
     if(musou_clip(u16(a,MOTION))||ascendance.double_cut||radiance_pursuit_pose(u16(a,MOTION)))return;
 #endif
     const WEvent *event=w_event(world.source,frame);

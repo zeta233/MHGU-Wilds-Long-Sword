@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use forge::imgui::{color::color, draw::DrawList};
 use forge::sys::imgui::ImVec2;
 
-static LAYERS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+static LAYERS: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
 
 #[unsafe(no_mangle)]
 extern "C" fn ml_radiance_screen(layer: u32, start: u32, end: u32, age: u32) {
@@ -65,53 +65,58 @@ pub fn draw(dl: &DrawList, size: ImVec2, scale: f32) {
                 // tip crosses the view. Keep some camera-projected tilt.
                 let projected_slope = (axis.y / axis.x.abs().max(0.40))
                     * if axis.x >= 0.0 { 1.0 } else { -1.0 };
-                axis = ImVec2::new(-1.0, -(0.37 + 0.13*projected_slope).clamp(0.28,0.48));
+                let slope = (0.36 + 0.13*projected_slope).clamp(0.27,0.47)
+                    * size.y/size.x*(16.0/9.0);
+                axis = ImVec2::new(-1.0, -slope);
                 let right = (center.x + 0.44*size.x).clamp(0.87*size.x,1.04*size.x);
-                let half = size.x*(0.13 + 0.43*smooth(age/0.096));
-                let remaining = 1.0-smooth((age-0.087)/0.097);
-                let weight = (0.26 + 0.74*smooth(age/0.083))*remaining;
+                let half = size.x*(0.19 + 0.43*smooth(age/0.083));
+                let remaining = 1.0-smooth((age-0.105)/0.265);
+                let weight = (0.42 + 0.58*smooth(age/0.064))*remaining;
                 let origin = ImVec2::new(right-half,
                     center.y+(right-center.x-half)*-axis.y);
-                streak(dl,origin,axis,half*1.04,29.0*scale,0.27,(244,37,47,strength(54.0*remaining)));
-                streak(dl,origin,axis,half,16.5*scale,0.27,(255,29,42,strength(135.0*remaining)));
-                streak(dl,origin,axis,half*0.99,13.0*weight*scale,0.27,(255,110,115,strength(222.0*remaining)));
-                streak(dl,origin,axis,half*0.98,9.3*weight*scale,0.27,(255,248,238,strength(255.0*remaining)));
+                streak(dl,origin,axis,half*1.04,25.0*scale,0.27,(244,32,54,strength(51.0*remaining)));
+                streak(dl,origin,axis,half,16.5*scale,0.27,(255,25,48,strength(172.0*remaining)));
+                streak(dl,origin,axis,half*0.99,13.5*weight*scale,0.27,(255,116,130,strength(222.0*remaining)));
+                streak(dl,origin,axis,half*0.98,10.2*weight*scale,0.27,(255,248,238,strength(255.0*remaining)));
             }
             1 => {
-                let fade = (1.0-smooth(age/0.36))*smooth((age+0.008)/0.023);
-                let half = (span*1.05).clamp(46.0*scale, 90.0*scale);
-                for (distance,width,alpha) in [(0.0,25.0,21.0),(0.11,15.0,30.0),(0.22,6.0,40.0)] {
-                    let ghost = ImVec2::new(center.x-axis.x*half*distance,center.y-axis.y*half*distance);
-                    lens(dl,ghost,axis,half*(1.0+age),width*scale,(255,108,98,strength(alpha*fade)));
+                let fade = (1.0-smooth(age/0.24))*smooth((age+0.008)/0.023);
+                let radius = (span*0.22).clamp(10.0*scale, 33.0*scale);
+                for (reach,width,alpha) in [(1.0,0.62,38.0),(0.64,0.40,64.0),(0.34,0.22,84.0)] {
+                    lens(dl,center,axis,radius*reach*(1.0+age),radius*width,
+                         (255,164,102,strength(alpha*fade)));
                 }
             }
             2 => {
-                let fade = 1.0-smooth((age-0.072)/0.108);
-                let light = (0.28+0.72*smooth(age/0.017))*fade;
-                let spread = smooth(age/0.035);
-                let slope = (0.34+0.07*axis.y*(if axis.x >= 0.0 {1.0} else {-1.0})).clamp(0.28,0.41);
-                let slash = ImVec2::new(-1.0,slope);
+                let fade = 1.0-smooth((age-0.13)/0.39);
+                let light = (0.78+0.22*smooth(age/0.065))*fade;
+                let spread = smooth(age/0.095);
+                // Follow through from a shallow swipe into an ascending cut.
+                let projected = axis.y * if axis.x >= 0.0 { 1.0 } else { -1.0 };
+                let high = (0.44-0.05*projected).clamp(0.39,0.49);
+                let slope = 0.06+(high-0.06)*smooth(age/0.10);
+                let slash = ImVec2::new(-1.0,slope*size.y/size.x*(16.0/9.0));
                 let root_x = center.x.clamp(0.28*size.x,0.75*size.x);
                 let right = 1.13*size.x;
-                let left = root_x+(-0.16*size.x-root_x)*spread;
+                let left = root_x+(0.06*size.x-root_x)*(0.65+0.35*spread)-0.22*size.x*spread;
                 let half = (right-left)*0.5;
                 let mid = right-half;
-                let origin = ImVec2::new(mid,center.y-(mid-root_x)*slope);
-                let width = (4.0+9.0*spread)*scale;
+                let origin = ImVec2::new(mid,center.y-(mid-root_x)*slash.y);
+                let width = (5.0+17.0*spread)*scale;
                 streak(dl,origin,slash,half,2.0*width,-0.14,(204,17,40,strength(89.0*light)));
                 streak(dl,origin,slash,half,1.47*width,-0.14,(245,39,59,strength(164.0*light)));
                 streak(dl,origin,slash,half,1.08*width,-0.14,(255,122,135,strength(222.0*light)));
                 streak(dl,origin,slash,half,0.84*width,-0.14,(255,246,239,strength(249.0*light)));
                 // The softer fan expands beneath the dominant white sheet.
-                for (tilt, reach) in [(0.19,0.36),(0.35,0.27),(0.52,0.19)] {
-                    let ray = ImVec2::new(1.0,-slope+tilt);
+                for (tilt, reach) in [(0.10,0.36),(0.18,0.27),(0.25,0.19)] {
+                    let ray = ImVec2::new(1.0,(-slope+tilt*spread)*size.y/size.x*(16.0/9.0));
                     let length = size.x*reach*(0.53+0.47*spread)*0.5;
                     let start = ImVec2::new(root_x,center.y);
                     let origin = ImVec2::new(start.x+ray.x*length,start.y+ray.y*length);
-                    lens(dl,origin,ray,length,9.0*scale,(233,75,72,strength(42.0*light)));
+                    lens(dl,origin,ray,length,7.0*scale,(233,75,72,strength(34.0*light*spread)));
                 }
             }
-            _ if end != 0 && span >= 4.0*scale => {
+            3 if end != 0 && span >= 4.0*scale => {
                 let gain = (state >> 48) as f32 / 255.0;
                 let length = span*0.54;
                 let mid = ImVec2::new((center.x+tip.x)*0.5,(center.y+tip.y)*0.5);
@@ -120,6 +125,12 @@ pub fn draw(dl: &DrawList, size: ImVec2, scale: f32) {
                 streak(dl,mid,axis,length,8.5*scale,0.21,(234,69,35,strength(64.0*gain)));
                 streak(dl,mid,axis,length*0.97,(4.4+1.3*wave)*scale,0.21,(255,133,48,strength(104.0*gain)));
                 streak(dl,mid,axis,length*0.96,2.0*scale,0.21,(255,221,142,strength(125.0*gain)));
+            }
+            4..=15 if end != 0 => {
+                let gain = (state >> 48) as f32 / 255.0;
+                let length = (span*0.72).clamp(1.7*scale, 7.0*scale);
+                lens(dl,center,axis,length,1.6*scale,(247,112,33,strength(128.0*gain)));
+                lens(dl,center,axis,length*0.82,0.73*scale,(255,221,145,strength(246.0*gain)));
             }
             _ => {}
         }

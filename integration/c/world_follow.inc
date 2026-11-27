@@ -35,7 +35,6 @@ static float world_helm_blade[16];
 #endif
 typedef struct {unsigned target;float next;} WPrimaryCooldown;
 static WPrimaryCooldown world_primary_cooldown[10];
-static float world_elapsed;
 static u32 (*world_original_monster_query)(void *,void *,void *);
 typedef void (*WMonsterDamage)(void *,void *,void *,void *,void *,void *,void *);
 static void (*world_original_monster_damage)(void *,void *,void *,void *,void *,void *,void *,void *);
