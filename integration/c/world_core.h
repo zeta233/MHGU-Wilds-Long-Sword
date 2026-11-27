@@ -4,6 +4,17 @@
 #include "world_inputs.h"
 #include "world_controls.h"
 
+static inline float w_scale_integer(unsigned value,float scale)
+{
+    float converted=(float)value;
+#if defined(__arm__)
+    /* Keep the conversion and scale separate. Ryujinx A32 rejects the
+     * fixed-point VCVT encoding GCC can fuse them into. */
+    __asm__("" : "+t"(converted));
+#endif
+    return converted*scale;
+}
+
 enum { W_NONE,W_FORESIGHT,W_THRUST,W_RISE,W_AIR,W_DOWN,W_LAND,W_SHEATHE,W_SMALL,W_BIG,W_SHEATHE_END,W_GROUND,
        /* Wilds actions with dedicated animation slots. */
        W_CHIJIN,W_CHARGE,W_SLIDE,W_RELEASE,W_FOCUS };

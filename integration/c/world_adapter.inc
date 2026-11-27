@@ -1751,7 +1751,7 @@ static void world_roll_crimson_input(const MLObservation *input)
 /* Track a fresh R through the opening cut or confirmed guard reaction. */
 static struct {
     void *actor;
-    unsigned epoch,action,motion,generation,keys,second;
+    unsigned epoch,action,motion,generation,keys,second,release,press_id;
 } valor_guard;
 static unsigned valor_guard_pose(void *a)
 {
@@ -1792,12 +1792,24 @@ static unsigned valor_release_input(void *a,const MLObservation *b,unsigned edge
         return 0;
     }
     if(stage){
-        if(!owned||valor_release_link.stage!=stage)
-            valor_release_link=(__typeof__(valor_release_link)){.actor=a,.epoch=b->epoch,.stage=stage};
+        if(!owned||valor_release_link.stage!=stage){
+            valor_release_link=(__typeof__(valor_release_link)){
+                .actor=a,.epoch=b->epoch,.stage=stage,
+                .queued=stage==W_VALOR_RELEASE_SECOND&&valor_guard.release};
+            if(stage==W_VALOR_RELEASE_SECOND)valor_guard.release=0;
+        }
         valor_release_link.last_sample=sample_sequence;
     }
     if(b->held&~ML_R)valor_release_link.queued=0;
-    else if(b->held==ML_R&&(edge&PAD_R))valor_release_link.queued=1;
+    else if(b->held==ML_R){
+        if(valor_release_link.stage==W_VALOR_RELEASE_SECOND){
+            /* The native request and the action update can both see this press. */
+            if((edge&PAD_R)&&valor_guard.press_id!=valor_r_press_id){
+                valor_guard.press_id=valor_r_press_id;
+                valor_release_link.queued=1;
+            }
+        }else if(edge&PAD_R)valor_release_link.queued=1;
+    }
     return stage?stage:W_VALOR_RELEASE_TAIL;
 }
 static unsigned valor_follow_input(unsigned keys,unsigned edge)
@@ -1812,8 +1824,15 @@ static void valor_guard_input(void *a,unsigned keys,unsigned edge)
         valor_guard=(__typeof__(valor_guard)){
             .actor=a,.epoch=byte(a,AREA),.action=u16(a,ACTION)};
     valor_guard.motion=u16(a,MOTION);valor_guard.generation=bind_generation;
-    if(keys&~ML_R)valor_guard.keys=0;
-    else if(keys==ML_R&&(edge&PAD_R))valor_guard.keys=ML_R;
+    if(keys&~ML_R)valor_guard.keys=valor_guard.release=0;
+    else if(keys==ML_R){
+        if(valor_guard_pose(a)){
+            if(!(edge&PAD_R)||valor_guard.press_id==valor_r_press_id)return;
+            valor_guard.press_id=valor_r_press_id;
+            if(valor_guard.keys||valor_guard.second)valor_guard.release=1;
+            else valor_guard.keys=ML_R;
+        }else if(edge&PAD_R)valor_guard.keys=ML_R;
+    }
 }
 #endif
 #if ML_WILDS_MOVES
@@ -2531,8 +2550,12 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
     unsigned edge=bits&~wilds_input_previous;
     unsigned release_route=valor_release_input(a,&raw,edge);
     unsigned spirit_three=w_valor_third_action(state,action);
+    if(!world.move&&valor_active(a)&&valor_guard_pose(a)&&w_valor_second_action(state,action)){
+        valor_guard_input(a,raw.held,edge);
+        return 1;
+    }
+    if(valor_guard_second(a)&&spirit_three)return 1;
     if(release_route!=W_VALOR_RELEASE_SECOND)valor_third_input(a,&raw,edge);
-    if(release_route==W_VALOR_RELEASE_SECOND&&spirit_three)return 1;
     if(release_route&&valor_release_link.queued&&state==16&&
        (w_guild_attack(action)||action==41||(action>=87&&action<=144)))return 1;
     if(valor_second_pose(a)&&spirit_three&&!(raw.held&~ML_R))return 1;
@@ -3640,9 +3663,10 @@ static unsigned world_update(void *a,const MLObservation *b)
     unsigned guard_confirmed=valor_guard_pose(a);
     unsigned first_ready=guard_confirmed?b->animation_frame>=55:
         valor_first_pose(a)&&b->motion==0x568&&b->animation_frame>=62;
-    if(d.kind==W_KEEP&&first_ready&&valor_guard_same(a)&&valor_guard.keys){
+    if(d.kind==W_KEEP&&first_ready&&valor_guard_same(a)&&!valor_guard.second&&valor_guard.keys){
         if(b->gauge>=15||o.rank==3){
             valor_guard.second=guard_confirmed;
+            if(guard_confirmed)valor_third=(__typeof__(valor_third)){0};
             d=(WDecision){.kind=W_NATIVE,.native_action=116,.heading=b->heading};
         }
         valor_guard.keys=0;

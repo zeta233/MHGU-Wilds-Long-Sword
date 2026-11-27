@@ -75,6 +75,9 @@ static u32 patch_count,installed,submitting,update_depth,held,sample_sequence,pa
 static unsigned hunter_art_x_held;
 enum { HUNTER_ART_CONTROL_TYPE=2, HUNTER_ART_INPUT_MASK=0xff00u };
 #endif
+#if ML_WORLD_COMBAT && ML_WILDS_MOVES
+static u32 valor_r_press_id,valor_r_down;
+#endif
 static u32 bind_generation;static void *bind_actor;
 static MLState controller;
 static u32 seen_actor;
@@ -143,6 +146,10 @@ static void ml_pad_read(void)
     if(!(raw&0x1000u))hunter_art_x_held=0;
     else if(hunter_art_x_chord(raw))hunter_art_x_held=1;
     if(hunter_art_x_held)held&=~ML_X;
+#endif
+#if ML_WORLD_COMBAT && ML_WILDS_MOVES
+    if((held&ML_R)&&!valor_r_down)++valor_r_press_id;
+    valor_r_down=held&ML_R;
 #endif
     pad_valid=1;
 }
@@ -853,7 +860,7 @@ static unsigned pursuit_grip_return(void *a,void *o,unsigned motion,unsigned pos
         }
         pursuit_idle_grip.last_heading=yaw;
         unsigned left=delta>0;
-        float turn=(float)(left?delta:-delta)/16384.f;if(turn>1)turn=1;
+        float turn=w_scale_integer((unsigned)(left?delta:-delta),1.f/16384.f);if(turn>1)turn=1;
         progress=left?(f+3*turn)/(1+.2f*turn):(f+4*turn)/(1+turn);
         if(progress<pursuit_idle_grip.grip_progress)progress=pursuit_idle_grip.grip_progress;
         pursuit_idle_grip.grip_progress=progress;

@@ -301,7 +301,7 @@ unsigned w_rotation(WState *s,const WObservation *o,unsigned *heading)
             s->turn_origin=b->heading;s->turn_delta=delta;
             /* t*(2-t) starts at twice its mean speed. Give large
              * triggered corrections enough time to expose intermediate poses. */
-            float smooth=(float)(delta<0?-delta:delta)/65536.f;
+            float smooth=w_scale_integer((unsigned)(delta<0?-delta:delta),1.f/65536.f);
             s->turn_duration=duration>smooth?duration:smooth;s->turn_age=0;
         }
     }

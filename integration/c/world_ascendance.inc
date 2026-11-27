@@ -1502,7 +1502,7 @@ static WDecision ascendance_musou_command(void *a,WObservation *o,unsigned raw,u
                 /* Approximate the original 55 ms exponential input filter. */
                 float t=dt/(60*.055f);
                 float ease=1-1/(1+t*(1+t*(.5f+t*(1.f/6+t/24))));
-                float strength=o->base.magnitude>=50?o->base.magnitude/128.f:0;
+                float strength=o->base.magnitude>=50?w_scale_integer(o->base.magnitude,1.f/128.f):0;
                 unsigned yaw=o->base.input_heading;
                 musou.spin_x+=(strength*world_sin(yaw)-musou.spin_x)*ease;
                 musou.spin_z+=(strength*world_sin(yaw+16384)-musou.spin_z)*ease;
@@ -1619,7 +1619,7 @@ static void ascendance_walk_tick(void *a,WObservation *o,float frames)
         if(aligned<0)aligned=0;
         if(aligned>1)aligned=1;
         aligned=aligned*aligned*(3-2*aligned);
-        target=RADIANCE_WALK_UNITS_PER_TICK*(magnitude/128.f)*(.24f+.76f*aligned);
+        target=RADIANCE_WALK_UNITS_PER_TICK*w_scale_integer(magnitude,1.f/128.f)*(.24f+.76f*aligned);
     }
     float speed=ascendance.walk_speed, change=.7523f*frames;
     if(target>speed+change)speed+=change;
