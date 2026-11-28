@@ -3154,6 +3154,15 @@ static unsigned world_aerial_pose(unsigned state,unsigned action,unsigned motion
         (motion==0x565||motion==0x568||(motion>=0x598&&motion<=0x59c));
 }
 
+static unsigned world_aerial_native_priority(void *a)
+{
+    if(!aerial_style(a))return 0;
+    unsigned state=u16(a,STATE);
+    return state==4||(word(a,AIR)&0x400)||
+        world_aerial_pose(state,u16(a,ACTION),u16(a,MOTION))||
+        (aerial_landing.actor==a&&aerial_landing.area==byte(a,AREA)&&aerial_landing.airborne);
+}
+
 static unsigned world_aerial_chord(unsigned keys,unsigned raw)
 {
     return keys==(ML_R|ML_B)||(keys==(ML_R|ML_Y)&&(raw&PAD_FOCUS));
@@ -3270,10 +3279,19 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
 {
     MLObservation raw=observe(a,0);w_keys_tick(&world.keys,&raw);
 #if ML_WILDS_MOVES
-    if(!world.move&&aerial_style(a))return world_aerial_request(a,&raw,state,action);
+    if(!world.move&&world_aerial_native_priority(a))return world_aerial_request(a,&raw,state,action);
 #endif
     if(world.actor!=(u32)(uptr)a||world.epoch!=byte(a,AREA)||(int16_t)u16(a,HP)<=0)return 0;
 #if ML_WILDS_MOVES
+    if(!world.move&&aerial_style(a)&&state==1&&action==AERIAL_HOP&&raw.held==(ML_R|ML_B)&&
+       (byte(a,DRAWN)&1)&&world_ready(a)){
+        /* Aerial's B is a hop request instead of the common roll. Reserve
+         * it only if the shared ground timeline can accept special sheathe. */
+        unsigned source=w_guild_source(u16(a,STATE),raw.native_action,raw.motion);
+        const WEvent *cancel=w_event(source,raw.animation_frame);
+        if(source==1||(cancel&&((cancel->input[WI_SHEATHE.word]>>WI_SHEATHE.shift)&3)==3))
+            return 1;
+    }
     unsigned bits=
 #if ML_ASCENDANCE_PROTOTYPE
         ascendance_pad_bits(a);
@@ -3971,12 +3989,21 @@ static void world_passive_tick(void *a,const WObservation *o)
 #if ML_WILDS_MOVES
 static unsigned world_aerial_native_step(void *a,const MLObservation *b)
 {
-    WObservation passive={.base=*b,.alive=(int16_t)u16(a,HP)>0,.resources_ready=world_ready(a)};
+    WObservation passive={.base=*b,.state=u16(a,STATE),.drawn=byte(a,DRAWN)&1,
+        .alive=(int16_t)u16(a,HP)>0,.resources_ready=world_ready(a)};
     world_passive_tick(a,&passive);
     if(world.actor!=b->actor||world.epoch!=b->epoch){
         w_reset(&world);world.actor=b->actor;world.epoch=b->epoch;
     }
     world_fx_tick(a);
+#if ML_ASCENDANCE_PROTOTYPE
+    /* Keep displaying and ticking the bracer through stock vault and ledge
+     * states. This phase keeps control of the landing keys and disallows ignition. */
+    ascendance_tick(a,&passive,ascendance_pad_bits(a),0);
+#endif
+    wilds_input_previous=ml_pad_raw_bits();
+    focus_lead_time=focus_strike_time=0;
+    focus_native.active=0;
     return world_aerial_update(a,b,passive.resources_ready);
 }
 
@@ -3995,7 +4022,10 @@ static void world_aerial_pad_poll(void)
 static unsigned world_update(void *a,const MLObservation *b)
 {
 #if ML_WILDS_MOVES
-    if(aerial_style(a)&&!world.move)return world_aerial_native_step(a,b);
+    if(!world.move&&aerial_style(a)){
+        if(world_aerial_native_priority(a))return world_aerial_native_step(a,b);
+        aerial_landing.previous=b->held;
+    }
     unsigned art_return=0, art_joined=0, art_join_route=0;
     float art_join_frame=0;
     MLObservation art_wait_input;

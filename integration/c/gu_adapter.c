@@ -200,7 +200,8 @@ static unsigned alchemy_style(void *a){return hunter_style(a)==STYLE_ALCHEMY;}
 static unsigned guild_rules(void *a)
 {
     unsigned style=hunter_style(a);
-    return style==STYLE_GUILD||style==STYLE_STRIKER||style==STYLE_ADEPT||style==STYLE_ALCHEMY;
+    return style==STYLE_GUILD||style==STYLE_STRIKER||style==STYLE_AERIAL||
+        style==STYLE_ADEPT||style==STYLE_ALCHEMY;
 }
 static unsigned valor_active(void *a)
 {
@@ -1582,7 +1583,7 @@ static u32 request_hook(void *a,u32 state,u32 action,u32 flags)
     if(world_request(a,state,action,flags))return 0;
 #if ML_WORLD_INPUT_VM
 #if ML_WILDS_MOVES
-    if(aerial_style(a)&&!world.move)return original_request(a,state,action,flags);
+    if(!world.move&&world_aerial_native_priority(a))return original_request(a,state,action,flags);
     if(world_focus_native_input(a,state,action,flags))return 0;
     unsigned aim;
     if(state==16&&w_guild_attack(action)&&(byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&
