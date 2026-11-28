@@ -261,7 +261,7 @@ static unsigned surface_bind(void *target,const void *part,const float *contact,
 }
 
 static unsigned surface_sample(WSurfaceModel *m,void *target,const WSurfaceAnchor *a,
-                               WSurfaceVec *point,WSurfaceVec *normal)
+                               WSurfaceVec *point,WSurfaceVec *normal,WSurfaceVec *edge)
 {
     WSurfaceMesh mesh;
     if(a->model!=m->model||a->mesh>=m->mesh_count||!surface_mesh(m,target,a->mesh,&mesh))return 0;
@@ -271,5 +271,6 @@ static unsigned surface_sample(WSurfaceModel *m,void *target,const WSurfaceAncho
     WSurfaceVec x=surface_sub(p[1],p[0]),y=surface_sub(p[2],p[0]);
     *point=surface_add(surface_add(p[0],x,a->u),y,a->v);
     *normal=surface_cross(x,y);
+    if(edge)*edge=x;
     return surface_dot(*normal,*normal)>.0001f;
 }

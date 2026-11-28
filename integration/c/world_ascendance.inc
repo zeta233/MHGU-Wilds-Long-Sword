@@ -1,5 +1,5 @@
 /* Incremental Ascendance support shared by Guild and Valor. */
-enum { PAD_BOOST=0x2, BOOST_COST=100, BOOST_CAPACITY=3*BOOST_COST, BOOST_HIT=12, BOOST_WOUND=30,
+enum { PAD_BOOST=0x2, BOOST_COST=100, BOOST_CAPACITY=3*BOOST_COST, BOOST_HIT=12, BOOST_WOUND=25,
        BOOST_DURATION=25*60, BOOST_SHEATHE_WINDOW=60, RADIANCE_INPUT=ML_X|ML_A, RADIANCE_STAMINA=0x13e0 };
 enum { RADIANCE_OFF,RADIANCE_HOLD,RADIANCE_RELEASE,RADIANCE_FLASH,RADIANCE_CHASE,RADIANCE_FOLLOW };
 typedef enum { OFFSET_NORMAL,OFFSET_STOCK_ONLY,OFFSET_FORCE,OFFSET_BREAK } OffsetRule;
@@ -9,7 +9,7 @@ static struct {
     unsigned area,sample,charge,sheathe,enhanced_iai;
     unsigned radiance,boost_toggle_pending,radiance_hit,radiance_sample;
     float remaining,ready_frames;
-    unsigned musou_sheathe_r,flash_r_buffered,flash_x_buffered;
+    unsigned musou_sheathe_r,flash_r_buffered;
     float walk_speed;
     unsigned walk_intent;
     float flash_travel;
@@ -31,6 +31,7 @@ static struct {
     unsigned helm_power,release_power;
     float flash_offset_due;
     OffsetRule flash_offset_rule;
+    unsigned valor_musou_released;
 } ascendance;
 
 /* Pursuit follows the particular monster whose native reaction accepted
@@ -49,6 +50,8 @@ static struct {
     float offset_grace;
     float next_sheath_spark,travel_x,travel_z,blocked_progress;
     float extra_run_frames;
+    unsigned flash_hit;
+    float swing_until,first_hit_time;
 } radiance_pursuit;
 enum {
     RADIANCE_OFFSET_POINTS=90, RADIANCE_OFFSET_STEP=150, RADIANCE_OFFSET_CAP=601,
@@ -75,6 +78,8 @@ static void ascendance_offset_quest(unsigned quest)
 static void *ascendance_velocity_actor;
 enum { MUSOU_NONE,MUSOU_FLURRY,MUSOU_DASH,MUSOU_CUT,MUSOU_ENTRY,MUSOU_SEAT };
 enum { MUSOU_LEGACY_CYCLES=5,MUSOU_MAX_HITS=8,MUSOU_SUSTAIN_FRAMES=9 };
+enum { VALOR_MUSOU_DASH_SLOT=84, VALOR_MUSOU_DASH_HIT_BEGIN=28,
+       VALOR_MUSOU_DASH_HIT_END=39, VALOR_MUSOU_DASH_CHAIN=48, VALOR_MUSOU_DASH_END=62 };
 static const struct {unsigned char clip,group;} musou_chain[]={
     {MUSOU_FORWARD,1},{MUSOU_REVERSE,1},{MUSOU_FORWARD,1},{MUSOU_SPIN,1},
     {MUSOU_REVERSE,2},{MUSOU_FORWARD,2},{MUSOU_REVERSE,2},{MUSOU_SPIN,2},
@@ -99,11 +104,12 @@ static struct {
     unsigned phase,cycles,hits,sustain_sample,last_attack,hit_seen;
     unsigned dash_heading,return_heading,stroke,opening_path,second_path,group_two_side,late_group;
     float start_x,start_z,return_dx,return_dz,travel_frame,sustain_frames,spin_x,spin_z;
+    float step_x,step_z;
     float wall_root_frame;
     unsigned spin_sample,seat_input_sample,seat_key;
     float seat_input_buffer;
     unsigned burst_level,burst_sent,burst_count;
-    unsigned offset_dash_armor;
+    unsigned offset_dash_armor,valor;
     MusouBurstTarget burst_targets[10];
 } musou;
 #if ML_WILDS_MOVES
@@ -172,12 +178,18 @@ static unsigned ascendance_owner(void *a)
         (int16_t)u16(a,HP)>0&&ascendance_style(a);
 }
 
-static float ascendance_attack_rate(void *a,unsigned source)
+static float ascendance_bonus_rate(unsigned style,unsigned source)
 {
-    if(!ascendance_owner(a)||hunter_style(a)!=0||ascendance.remaining<=0)return 1.f;
     if(source==906||source==907)return 1.2f;
     if(source==109||source==917||source==W_CRIMSON_SPIN)return 1.1f;
+    if(style==5&&(source==W_CRIMSON_MOVING||source==W_CRIMSON_STATIONARY||source==W_CRIMSON_RETREAT||
+                  (source==904&&world.valor_release)))return 1.1f;
     return 1.f;
+}
+
+static float ascendance_attack_rate(void *a,unsigned source)
+{
+    return ascendance_owner(a)&&ascendance.remaining>0?ascendance_bonus_rate(hunter_style(a),source):1.f;
 }
 
 static void ascendance_apply_attack_rate(void *a,float rate)
@@ -203,6 +215,12 @@ static unsigned ascendance_owned_blade(const void *attack)
         u16(attack,0x34)==world_attack_id;
 }
 
+static unsigned ascendance_musou_motion_value(void)
+{
+    if(musou.phase!=MUSOU_FLURRY)return 14;
+    return musou_spin_slot(world.slot)||world.slot==musou_strokes[MUSOU_SPIN].slot?6:12;
+}
+
 static void ascendance_musou_mark(void *target,void *status,unsigned region,
                                   const float *point,unsigned damage)
 {
@@ -215,9 +233,8 @@ static void ascendance_musou_mark(void *target,void *status,unsigned region,
     }
     if(musou.burst_count>=sizeof(musou.burst_targets)/sizeof(*musou.burst_targets))return;
     MusouBurstTarget *mark=musou.burst_targets+musou.burst_count++;
-    unsigned mv=musou.phase==MUSOU_FLURRY?(musou_spin_slot(world.slot)?6:12):14;
     *mark=(MusouBurstTarget){.target=target,.status=status,.uid=uid,.id=id,.region=region,
-        .damage=damage,.motion_value=mv};
+        .damage=damage,.motion_value=ascendance_musou_motion_value()};
     for(unsigned k=0;k<3;++k)mark->offset[k]=point[k]-real(target,0x40+4*k);
     log_event("ascendance_musou_mark",(u32)(uptr)target,musou.phase,region,damage);
 }
@@ -283,7 +300,7 @@ static void ascendance_hit(void *a,const void *attack,void *target,unsigned woun
         ((void (*)(void *,int,int))(main_base+0x2a309c))(a,50,-1);
         log_event("ascendance_flash_hit",(u32)(uptr)a,before,word(a,0x2780),damage);
     }
-    if(damage&&ascendance.radiance==RADIANCE_FOLLOW&&target==radiance_pursuit.target&&
+    if(damage&&ascendance.radiance==RADIANCE_FOLLOW&&
        world.move==W_SMALL&&(!radiance_pursuit.independent||world.slot==PURSUIT_FIRST_SLOT)&&
        !radiance_pursuit.rewarded&&ascendance_owned_blade(attack)){
         radiance_pursuit.rewarded=1;
@@ -292,6 +309,7 @@ static void ascendance_hit(void *a,const void *attack,void *target,unsigned woun
             radiance_pursuit.first_hit_frame=real(a,FRAME);
             radiance_pursuit.first_hit_sample=sample_sequence;
             radiance_pursuit.first_hit_pose_pending=1;
+            radiance_pursuit.first_hit_time=world_elapsed;
         }
         unsigned before=word(a,0x2780);
         ((void (*)(void *,int,int))(main_base+0x2a309c))(a,50,-1);
@@ -325,16 +343,41 @@ static float ascendance_attack_scale(void *attack)
 {
     void *a=ascendance.actor;
     if(!a||(uptr)attack!=(uptr)a+0x3020||!ascendance_owner(a))return 1.0f;
-    if(hunter_style(a)==5)return ascendance.remaining>0?1.05f:1.0f;
-    if(musou.phase&&ascendance_owned_blade(attack)){
-        if(musou.phase==MUSOU_FLURRY){
-            if(!musou_clip(u16(a,MOTION)))return .56f*musou_damage_multiplier;
-            if(musou_spin_slot(world.slot))return .275f*musou_damage_multiplier;
-            return (world.slot==musou_strokes[MUSOU_SPIN].slot?.55f:.43f)*musou_damage_multiplier;
+    unsigned owned=ascendance_owned_blade(attack);
+    if(owned&&ascendance.radiance==RADIANCE_FOLLOW&&radiance_pursuit.independent){
+        unsigned mv=u16(attack,0x38);
+        if(mv)return (world.slot==PURSUIT_SECOND_SLOT?120.f:60.f)*
+            (ascendance.remaining>0?1.05f:1.f)/mv;
+    }
+    /* Both styles use the same Musou clips and hit rows. Resolve their
+     * authored damage before the general style-specific boost. */
+    if(musou.phase&&owned){
+        unsigned native_mv=u16(attack,0x38);
+        if(!native_mv)return 1.f;
+        unsigned target_mv=ascendance_musou_motion_value();
+        float scale=target_mv*musou_damage_multiplier/native_mv;
+#if ML_TRACE_EVENTS
+        static unsigned last_attack,last_generation;
+        if(last_attack!=world_attack_id||last_generation!=bind_generation){
+            last_attack=world_attack_id;last_generation=bind_generation;
+            log_event("ascendance_musou_power",(u32)(uptr)a,musou.phase,native_mv,(u32)(scale*1000.f+.5f));
         }
-        if(musou.opening_path)return 1.05f*musou_damage_multiplier;
-        float bonus=musou.hits>=2?musou.hits*(musou.phase==MUSOU_DASH?.10f:.16f):0;
-        return (1.05f+bonus)*musou_damage_multiplier;
+#endif
+        return scale;
+    }
+    if(hunter_style(a)==5){
+        unsigned special=owned&&ascendance_bonus_rate(5,world.source)>1.f;
+#if ML_TRACE_EVENTS
+        if(special){
+            static unsigned last_attack,last_generation;
+            if(last_attack!=world_attack_id||last_generation!=bind_generation){
+                last_attack=world_attack_id;last_generation=bind_generation;
+                log_event("ascendance_valor_damage_scale",(u32)(uptr)a,world.source,
+                    world_attack_id,ascendance.remaining>0?125:100);
+            }
+        }
+#endif
+        return ascendance.remaining>0?(special?1.25f:1.05f):1.f;
     }
     unsigned boost=ascendance.remaining>0;
     if(ascendance.enhanced_iai&&world.move==W_BIG&&world_attack_owned&&
@@ -374,7 +417,6 @@ static void ascendance_transition(void *a,const WDecision *d)
         musou=(__typeof__(musou)){0};
     if(ascendance.radiance==RADIANCE_RELEASE&&d->kind==W_ENTER&&d->move==W_BIG){
         ascendance.radiance=RADIANCE_FLASH;
-        ascendance.flash_x_buffered=0;
     }
     else if(!(d->kind==W_ENTER&&
        ((ascendance.radiance==RADIANCE_HOLD&&d->move==W_SHEATHE)||
@@ -817,25 +859,34 @@ static void ascendance_offset_tick(void)
 static void ascendance_flash_target(void *a,void *attack,void *target,void *status,
                                     unsigned region,const void *point)
 {
-    if(!ascendance_owner(a)||!ascendance_flash_attack(attack)||!status||radiance_pursuit.confirmed)return;
+    if(!ascendance_owner(a)||!ascendance_flash_attack(attack)||!status)return;
     unsigned independent=ascendance_independent_flash();
     if(independent&&ascendance.flash_offset_owner&&ascendance.flash_offset_owner!=target)return;
     if(!independent&&u16(status,0x3ae))return;
     unsigned uid=byte(status,0x1b5);
-    if(world_monster(uid)!=target||(target==radiance_pursuit.target&&status==radiance_pursuit.status))return;
+    if(world_monster(uid)!=target)return;
+    if(target==radiance_pursuit.target&&status==radiance_pursuit.status){
+        if(radiance_pursuit.flash_hit)return;
+        radiance_pursuit.region=region;
+        radiance_pursuit.dx=real(point,0)-real(target,0x40);
+        radiance_pursuit.dz=real(point,8)-real(target,0x48);
+        radiance_pursuit.flash_hit=1;
+        log_event("ascendance_flash_target",(u32)(uptr)a,(u32)(uptr)target,region,uid);
+        return;
+    }
+    if(radiance_pursuit.confirmed)return;
     radiance_pursuit=(__typeof__(radiance_pursuit)){
-        .target=target,.status=status,.uid=uid,.region=region,
+        .target=target,.status=status,.uid=uid,.region=region,.flash_hit=1,
         .dx=real(point,0)-real(target,0x40),.dz=real(point,8)-real(target,0x48)
     };
     log_event("ascendance_flash_target",(u32)(uptr)a,(u32)(uptr)target,region,uid);
     if(independent)ascendance_flash_offset_credit();
 }
 
-#if ML_OFFSET_ALWAYS_STAGGER
 /* Start from the accepted incoming attack, even if the player's blade
  * does not reach its owner. An existing same-target blade contact keeps
  * its more precise hit-part and pursuit point. */
-static void ascendance_offset_test_target(void *target)
+static void ascendance_offset_target(void *target)
 {
     if(!target||radiance_pursuit.target==target)return;
     void *status=(void *)(uptr)word(target,0x1428);
@@ -846,9 +897,8 @@ static void ascendance_offset_test_target(void *target)
     radiance_pursuit=(__typeof__(radiance_pursuit)){
         .target=target,.status=status,.uid=uid
     };
-    log_event("ascendance_offset_test_target",(u32)(uptr)target,uid,0,0);
+    log_event("ascendance_offset_target",(u32)(uptr)target,uid,0,0);
 }
-#endif
 
 static unsigned ascendance_reaction_before(void *target)
 {
@@ -1080,8 +1130,6 @@ static WDecision ascendance_pursuit_run(void *a,WObservation *o,unsigned valid,f
     float ready=radiance_pursuit.phased?PURSUIT_HANDOFF_READY:0;
     /* The native collision body still decides how close the hunter can land. */
     const float stop_distance=125.f;
-    float height=valid?real(radiance_pursuit.target,0x44)-real(a,0x44):0;
-    unsigned close_for_cut=valid&&dist<=205.f&&height>=-150.f&&height<=150.f;
     unsigned timed=age>=ready+(radiance_pursuit.buffered?88:62)+radiance_pursuit.extra_run_frames;
     if(world.slot==PURSUIT_RUN_SLOT&&frames>0&&radiance_pursuit.progress_sample!=o->base.sample_sequence){
         radiance_pursuit.progress_sample=o->base.sample_sequence;
@@ -1125,7 +1173,7 @@ static WDecision ascendance_pursuit_run(void *a,WObservation *o,unsigned valid,f
             log_event("ascendance_chase_run",(u32)(uptr)a,(u32)dist,(u32)age,0);
             return ascendance_pursuit_motion(PURSUIT_RUN_SLOT,0,10);
         }
-        if(age>=PURSUIT_HANDOFF_READY&&radiance_pursuit.buffered&&close_for_cut)
+        if(age>=PURSUIT_HANDOFF_READY&&radiance_pursuit.buffered)
             return ascendance_pursuit_first(a,o);
         if(age>=PURSUIT_HANDOFF_READY)
             return ascendance_pursuit_motion(PURSUIT_BRAKE_SLOT,PURSUIT_ARRIVAL_START+12,6);
@@ -1152,7 +1200,7 @@ static WDecision ascendance_pursuit_run(void *a,WObservation *o,unsigned valid,f
             return d;
         }
         if(pursuit_brake_elapsed(frame)>=12&&radiance_pursuit.speed<=.1f){
-            if(close_for_cut&&radiance_pursuit.buffered&&age>=ready)
+            if(radiance_pursuit.buffered&&age>=ready)
                 return ascendance_pursuit_first(a,o);
             if(dist>(obstructed?205.f:stop_distance+55.f)){
                 radiance_pursuit.blocked_progress=radiance_pursuit.wall_stall_frames=0;
@@ -1160,6 +1208,8 @@ static WDecision ascendance_pursuit_run(void *a,WObservation *o,unsigned valid,f
             }
         }
     }else{
+        if(radiance_pursuit.buffered&&age>=ready)
+            return ascendance_pursuit_first(a,o);
         /* Authored gait: the pursuit run loop's root motion is 6.5 m/s, and the
          * reference ramps to chase_speed 7.2 m/s beyond 3 m of target distance.
          * Speed is GU units per frame, so 6.5 m/s = 10.83 and 7.2 m/s = 12. */
@@ -1208,14 +1258,13 @@ static float ascendance_pursuit_handoff_sample(void)
     return radiance_flash_sample(radiance_pursuit.flash_exit_frame);
 }
 
-static void ascendance_valor_follow_input(const WObservation *o,unsigned edge,unsigned allow_pursuit)
+static void ascendance_valor_follow_input(const WObservation *o,unsigned edge)
 {
     unsigned keys=o->base.held;
     if(keys==ML_R&&(edge&PAD_R)){
         ascendance.valor_follow_key=ML_R;
         ascendance.valor_follow_r_press=valor_r_press_id;
     }else if(keys==ML_B&&(edge&PAD_B))ascendance.valor_follow_key=ML_B;
-    else if(allow_pursuit&&keys==ML_X&&(edge&PAD_X))ascendance.valor_follow_key=ML_X;
 }
 
 static WDecision ascendance_valor_finish(const WObservation *o,unsigned flash)
@@ -1245,11 +1294,21 @@ static WDecision ascendance_pursuit_cuts(void *a,WObservation *o,unsigned edge)
     unsigned first=world.slot==PURSUIT_FIRST_SLOT;
     float frame=o->base.animation_frame;
     if(radiance_pursuit.independent&&(!first||!radiance_pursuit.rewarded)&&
-       frame<(first?18.f:PURSUIT_SECOND_HIT_END)&&radiance_pursuit.attack_turn_sample!=o->base.sample_sequence){
+       frame<(first?PURSUIT_FIRST_HIT_END:PURSUIT_SECOND_HIT_END)&&
+       radiance_pursuit.attack_turn_sample!=o->base.sample_sequence){
         radiance_pursuit.attack_turn_sample=o->base.sample_sequence;
         float dt=o->base.simulation_delta;
-        if(o->has_focus_heading&&dt>0&&dt<=4){
-            int gap=ml_heading_delta(o->focus_camera_heading,world.heading);
+        float dx,dz;
+        unsigned aim=o->focus_camera_heading,aiming=o->has_focus_heading;
+        if(!aiming&&o->base.magnitude<50&&ascendance_pursuit_point(a,1,&dx,&dz)){
+            ascendance_pursuit_approach(&dx,&dz);
+            if(dx*dx+dz*dz<=320.f*320.f){
+                aim=ascendance_face(dx,dz,world.heading);
+                aiming=1;
+            }
+        }
+        if(aiming&&dt>0&&dt<=4){
+            int gap=ml_heading_delta(aim,world.heading);
             const float acceleration=65536.f/180.f;
             float accel=acceleration*dt;
             float goal=att_sqrt(2.f*acceleration*(gap<0?-gap:gap));
@@ -1288,15 +1347,15 @@ static WDecision ascendance_pursuit_cuts(void *a,WObservation *o,unsigned edge)
         radiance_pursuit.attack_turn=0;
         float start=ascendance_pursuit_second_start(radiance_pursuit.first_hit_frame);
         log_event("ascendance_follow_second",(u32)(uptr)a,(u32)(uptr)radiance_pursuit.target,(u32)frame,0);
-        log_event("ascendance_follow_join",(u32)(uptr)a,(u32)(radiance_pursuit.first_hit_frame*1000.f),(u32)(start*1000.f),0);
+        log_event("ascendance_follow_join",(u32)(uptr)a,(u32)(radiance_pursuit.first_hit_frame*1000.f),
+            (u32)(start*1000.f),(u32)((world_elapsed-radiance_pursuit.first_hit_time)*1000.f+.5f));
         pursuit_cut_bridge_begin(a);
         return ascendance_pursuit_motion(PURSUIT_SECOND_SLOT,start,2);
     }
-    if(ascendance.valor_flash&&!first)ascendance_valor_follow_input(o,edge,0);
+    if(ascendance.valor_flash&&!first)ascendance_valor_follow_input(o,edge);
     unsigned end=first?PURSUIT_FIRST_FRAMES-3:PURSUIT_SECOND_FRAMES-1;
-    /* Radiance guards neutral movement until an unhit follow finishes. */
-    if(first&&o->base.held)
-        end=PURSUIT_FIRST_BRANCH;
+    /* X requests the pursuit once. Further X presses may arrive on the
+     * last active frame and must not shorten the cut or its recovery. */
     if(frame>=end||o->base.motion_finished){
         if(ascendance.valor_flash&&!first&&ascendance.valor_follow_key)
             return ascendance_valor_finish(o,0);
@@ -1309,6 +1368,7 @@ static WDecision ascendance_pursuit_cuts(void *a,WObservation *o,unsigned edge)
     return (WDecision){0};
 }
 enum { FLASH_MUSOU_BRANCH=29, FLASH_MUSOU_BUFFER=27 };
+static unsigned ascendance_musou_resources(void *a);
 static WDecision ascendance_musou_start(void *a,const WObservation *o);
 
 static unsigned ascendance_flash_link(void *a,const WObservation *o)
@@ -1329,21 +1389,36 @@ static unsigned ascendance_flash_chase_target(void *a,float *dx,float *dz,unsign
     return ascendance_pursuit_point(a,*independent,dx,dz);
 }
 
-static WDecision ascendance_pursuit_command(void *a,WObservation *o,unsigned edge)
+static WDecision ascendance_pursuit_command(void *a,WObservation *o,unsigned raw,unsigned edge)
 {
     float delta=o->base.simulation_delta,dx=0,dz=0,frame=o->base.animation_frame;
     if(radiance_pursuit.target&&radiance_pursuit.sample!=o->base.sample_sequence){
         radiance_pursuit.sample=o->base.sample_sequence;
         if(delta>0&&delta<30)radiance_pursuit.age+=delta;
     }
-    unsigned follow_press=((edge&PAD_X)&&o->base.held==ML_X)||((edge&PAD_R)&&o->base.held==ML_R);
-    if(ascendance.radiance==RADIANCE_FLASH){
-        if(ascendance.valor_flash)ascendance_valor_follow_input(o,edge,1);
-        else if((edge&PAD_X)&&o->base.held==ML_X)ascendance.flash_x_buffered=1;
-    }
-    unsigned chase_requested=(!ascendance.valor_flash||ascendance.valor_follow_key==ML_X)&&
-        (!ascendance_independent_flash()||frame>=RADIANCE_FLASH_COUNTER_END);
     unsigned independent;
+    unsigned follow_press=!(raw&PAD_BOOST)&&
+        (((edge&PAD_X)&&o->base.held==ML_X)||((edge&PAD_R)&&o->base.held==ML_R));
+    if(ascendance.radiance==RADIANCE_FLASH){
+        if(ascendance.valor_flash){
+            ascendance_valor_follow_input(o,edge);
+            if(!(raw&PAD_BOOST))ascendance.valor_musou_released=1;
+            else if(ascendance.valor_musou_released&&(edge&PAD_BOOST)&&!o->base.held){
+                ascendance.valor_follow_key=ML_ZR;
+                log_event("valor_musou_buffer",(u32)(uptr)a,(u32)frame,radiance_pursuit.confirmed,0);
+            }
+        }
+    }
+    if(ascendance.radiance==RADIANCE_FLASH&&ascendance.valor_flash&&o->valor&&
+       ascendance.valor_follow_key==ML_ZR&&frame>=RADIANCE_FLASH_COUNTER_END&&o->state==16&&
+       world.move==W_BIG&&o->base.native_action==w_action(W_BIG)&&o->base.motion==0x500+RADIANCE_FLASH_SLOT&&
+       o->alive&&o->drawn&&o->grounded&&o->resources_ready&&
+       ascendance_flash_chase_target(a,&dx,&dz,&independent)&&ascendance_musou_resources(a)){
+        WDecision d=ascendance_musou_start(a,o);
+        if(d.kind!=W_KEEP)log_event("valor_musou_start",(u32)(uptr)a,(u32)frame,d.slot,0);
+        return d;
+    }
+    unsigned chase_requested=!ascendance_independent_flash()||frame>=RADIANCE_FLASH_COUNTER_END;
     if(chase_requested&&ascendance.radiance==RADIANCE_FLASH&&world.move==W_BIG&&o->grounded&&
        o->state==16&&o->base.native_action==w_action(W_BIG)&&o->base.motion==0x500+world.slot&&
        ascendance_flash_chase_target(a,&dx,&dz,&independent)){
@@ -1375,8 +1450,8 @@ static WDecision ascendance_pursuit_command(void *a,WObservation *o,unsigned edg
             radiance_pursuit.travel_x=real(a,0x40);
             radiance_pursuit.travel_z=real(a,0x48);
             radiance_pursuit.next_sheath_spark=50.f;
-            radiance_pursuit.buffered=ascendance.valor_flash||follow_press||ascendance.flash_x_buffered;
-            ascendance.flash_x_buffered=0;
+            radiance_pursuit.buffered=0;
+            radiance_pursuit.swing_until=0;
             ascendance.valor_follow_key=ascendance.valor_follow_r_press=0;
             world.heading=d.heading=o->base.heading;
             log_event("ascendance_chase",(u32)(uptr)a,(u32)(uptr)radiance_pursuit.target,d.heading,0);
@@ -1413,7 +1488,18 @@ static WDecision ascendance_pursuit_command(void *a,WObservation *o,unsigned edg
     if(ascendance.radiance!=RADIANCE_CHASE||world.move!=W_THRUST)return (WDecision){0};
     if(!o->alive||!o->resources_ready||!o->drawn||o->state!=16||
        o->base.native_action!=w_action(W_THRUST))return (WDecision){0};
-    if(follow_press)radiance_pursuit.buffered=1;
+    if(ascendance.valor_flash&&o->valor&&o->grounded&&ascendance.valor_musou_released&&
+       (edge&PAD_BOOST)&&!o->base.held&&ascendance_musou_resources(a)){
+        WDecision d=ascendance_musou_start(a,o);
+        if(d.kind!=W_KEEP)log_event("valor_musou_start",(u32)(uptr)a,(u32)frame,d.slot,0);
+        return d;
+    }
+    if(follow_press){
+        radiance_pursuit.swing_until=radiance_pursuit.age+27.f;
+        log_event("ascendance_chase_input",(u32)(uptr)a,o->base.held,(u32)(radiance_pursuit.age*1000.f),world.slot);
+    }
+    if(edge&PAD_B)radiance_pursuit.swing_until=0;
+    radiance_pursuit.buffered=radiance_pursuit.age<radiance_pursuit.swing_until;
     unsigned valid=o->grounded&&ascendance_pursuit_point(a,radiance_pursuit.independent,&dx,&dz);
     if(radiance_pursuit.independent){
         WDecision d=ascendance_pursuit_run(a,o,valid,dx,dz);
@@ -1452,7 +1538,7 @@ static WDecision ascendance_pursuit_command(void *a,WObservation *o,unsigned edg
 static WDecision ascendance_musou_motion(const WObservation *o,unsigned phase,unsigned move)
 {
     unsigned same=world.move==move;
-    WDecision d=w_radiance_enter(&world,o,move);
+    WDecision d=musou.valor?w_valor_musou_enter(&world,o,move):w_radiance_enter(&world,o,move);
     if(d.kind!=W_ENTER)return d;
     musou.phase=phase;
     musou.wall_root_frame=-1;
@@ -1544,6 +1630,11 @@ static WDecision ascendance_musou_dash(void *a,const WObservation *o)
     if(d.kind!=W_ENTER)return d;
     musou.start_x=real(a,0x40);musou.start_z=real(a,0x48);
     musou.dash_heading=yaw;musou.travel_frame=12;
+    if(musou.valor){
+        /* Fallback for a bank without the authored sprint join. */
+        world.slot=d.slot=VALOR_MUSOU_DASH_SLOT;
+        musou.travel_frame=0;
+    }
     if(outgoing){
         const void *resource=(const void *)(uptr)word(a,0xf18);
         const void *bank=resource?(const void *)(uptr)word(resource,0x64):0;
@@ -1586,13 +1677,14 @@ static unsigned ascendance_dash_floor(void *a,unsigned before_wall)
 {
     unsigned finishing=musou.phase==MUSOU_DASH||musou.phase==MUSOU_CUT||musou.phase==MUSOU_SEAT;
     unsigned spinning=musou.phase==MUSOU_FLURRY&&musou_spin_slot(world.slot);
-    unsigned wall_root=finishing||spinning;
+    unsigned valor_step=musou.valor&&(musou.phase==MUSOU_ENTRY||
+        (musou.phase==MUSOU_FLURRY&&!spinning));
+    unsigned wall_root=finishing||spinning||valor_step;
     if(wall_root!=before_wall||!musou.phase||!ascendance_owner(a)||
        !world_bound||world_bound_actor!=(u32)(uptr)a||u16(a,STATE)!=16||
        u16(a,ACTION)!=w_action(world.move)||u16(a,MOTION)!=0x500+world.slot||
        (word(a,AIR)&0x400))return 0;
-    /* The borrowed Iai clips already submit root travel. Replace that
-     * proposal for these two actions only, before native ground resolution.
+    /* Replace the native root proposal before ground and wall resolution.
      * GU stores the settled position from the previous update at 0x1000. */
     enum { POS_X=0x40,POS_Z=0x48,PREV_X=0x1000,PREV_Z=0x1008 };
     float x=real(a,PREV_X),z=real(a,PREV_Z);
@@ -1617,12 +1709,13 @@ static unsigned ascendance_dash_floor(void *a,unsigned before_wall)
         if(n<25)along+=(musou_spin_travel[n+1]-along)*(frame-n);
         float advance=along-musou.travel_frame;
         musou.travel_frame=along;
-        set_real(a,POS_X,x+advance*musou.spin_x);
-        set_real(a,POS_Z,z+advance*musou.spin_z);
+        float scale=musou.valor?1.55f:1.f;
+        set_real(a,POS_X,x+advance*musou.spin_x*scale);
+        set_real(a,POS_Z,z+advance*musou.spin_z*scale);
         return 1;
     }
     if(musou.phase==MUSOU_ENTRY||(musou.phase==MUSOU_FLURRY&&musou_path_slot(world.slot))){
-        set_real(a,POS_X,x);set_real(a,POS_Z,z);return 1;
+        set_real(a,POS_X,x+musou.step_x);set_real(a,POS_Z,z+musou.step_z);return 1;
     }
     if(musou.phase==MUSOU_FLURRY){
         const MusouStroke *clip=musou_clip(0x500+world.slot);
@@ -1638,19 +1731,19 @@ static unsigned ascendance_dash_floor(void *a,unsigned before_wall)
             dz=musou_root_steps[offset+current][1]-musou_root_steps[offset+previous][1];
         }
         float sine=world_sin(world.heading),cosine=world_sin(world.heading+16384);
-        set_real(a,POS_X,x+dx*cosine+dz*sine);
-        set_real(a,POS_Z,z+dz*cosine-dx*sine);
+        set_real(a,POS_X,x+dx*cosine+dz*sine+musou.step_x);
+        set_real(a,POS_Z,z+dz*cosine-dx*sine+musou.step_z);
         return 1;
     }
     unsigned returning=musou.phase==MUSOU_CUT&&world.slot==40;
-    if(returning||(musou.phase==MUSOU_DASH&&world.slot>=33&&world.slot<=39)){
+    if(returning||(musou.phase==MUSOU_DASH&&(musou.valor||(world.slot>=33&&world.slot<=39)))){
         if(!(frame>=0))return 0;
         if(frame>32)frame=32;
         unsigned n=(unsigned)frame;
         float progress=musou_out_progress[n];
         if(n<32)progress+=(musou_out_progress[n+1]-progress)*(frame-n);
         float fraction=progress-musou.travel_frame;
-        float step=MUSOU_DASH_UNITS*fraction;
+        float step=(world.slot==VALOR_MUSOU_DASH_SLOT?420.f:MUSOU_DASH_UNITS)*fraction;
         musou.travel_frame=progress;
         if(returning){
             float t=frame<14?frame/14:1;
@@ -1706,8 +1799,9 @@ static WDecision ascendance_musou_start(void *a,const WObservation *o)
 {
     unsigned offset_route=(ascendance.radiance==RADIANCE_FLASH&&
         (ascendance.flash_offset_owner||world.counter_success))||
-        (ascendance.radiance==RADIANCE_FOLLOW&&radiance_pursuit.confirmed);
-    musou=(__typeof__(musou)){.offset_dash_armor=offset_route};
+        ((ascendance.radiance==RADIANCE_CHASE||ascendance.radiance==RADIANCE_FOLLOW)&&radiance_pursuit.confirmed);
+    unsigned valor=o->valor_style&&ascendance.valor_flash;
+    musou=(__typeof__(musou)){.offset_dash_armor=offset_route,.valor=valor};
     ascendance.radiance=RADIANCE_OFF;
     radiance_pursuit.target=0;
     musou.stroke=ascendance_musou_resources(a);
@@ -1753,10 +1847,10 @@ static WDecision ascendance_red_musou_command(void *a,const WObservation *o,unsi
 static WDecision ascendance_double_start(void *a,const WObservation *o,unsigned enhanced)
 {
     /* The source accepts a camera-relative direction strictly above 0.2. */
-    unsigned step=o->base.magnitude*5>128;
+    unsigned step=o->valor_style?o->base.magnitude>=50:o->base.magnitude*5>128;
     unsigned slot=DOUBLE_DRAW_BASE+enhanced+2*step;
     if(!ascendance_double_resource(a,slot))return (WDecision){0};
-    WDecision d=w_radiance_enter(&world,o,W_SMALL);
+    WDecision d=o->valor_style?w_valor_musou_enter(&world,o,W_SMALL):w_radiance_enter(&world,o,W_SMALL);
     if(d.kind==W_ENTER){
         ascendance.double_cut=1;ascendance.double_credited=0;
         ascendance.double_travel_frame=step?-1:0;ascendance.double_step=step;
@@ -1837,6 +1931,14 @@ static WDecision ascendance_musou_command(void *a,WObservation *o,unsigned raw,u
             musou.seat_input_buffer=0;
         }
     }
+    if(musou.valor&&(musou.phase==MUSOU_ENTRY||musou.phase==MUSOU_FLURRY)){
+        float dt=o->base.simulation_delta;
+        float step=dt>0&&dt<=4&&o->base.magnitude>=50?
+            o->base.magnitude*(6.f/128.f)*dt:0.f;
+        unsigned yaw=o->base.input_heading;
+        musou.step_x=step*world_sin(yaw);
+        musou.step_z=step*world_sin(yaw+16384);
+    }
     if(musou.phase==MUSOU_ENTRY){
         if(bound&&(frame>=MUSOU_ENTRY_END||o->base.motion_finished))
             return ascendance_musou_motion(o,MUSOU_FLURRY,W_SMALL);
@@ -1876,10 +1978,22 @@ static WDecision ascendance_musou_command(void *a,WObservation *o,unsigned raw,u
             }
             return ascendance_musou_motion(o,MUSOU_FLURRY,W_SMALL);
         }
+    }else if(musou.phase==MUSOU_DASH&&musou.valor&&bound&&world.slot==VALOR_MUSOU_DASH_SLOT){
+        if(frame>=VALOR_MUSOU_DASH_CHAIN&&o->base.held==ML_R&&(edge&PAD_R))
+            ascendance.valor_follow_key=ML_R;
+        if(frame>=VALOR_MUSOU_DASH_END||o->base.motion_finished){
+            log_event("valor_musou_end",(u32)(uptr)a,musou.stroke,ascendance.valor_follow_key,(u32)frame);
+            return ascendance_valor_finish(o,0);
+        }
     }else if(musou.phase==MUSOU_DASH&&bound&&(frame>=(world.slot>=33&&world.slot<=39?32:43)||o->base.motion_finished))
         return ascendance_musou_return(a,o);
     else if(bound&&((musou.phase==MUSOU_CUT&&(frame>=(world.slot==40?32:39)||o->base.motion_finished))||
                     (musou.phase==MUSOU_SEAT&&(frame>=59||o->base.motion_finished)))){
+        if(musou.valor){
+            ascendance_musou_burst(a,58);
+            log_event("valor_musou_end",(u32)(uptr)a,musou.stroke,ascendance.valor_follow_key,(u32)frame);
+            return ascendance_valor_finish(o,0);
+        }
         unsigned seated=musou.phase==MUSOU_SEAT;
         if(!seated&&world.slot==40){
             const void *res=(const void *)(uptr)word(a,0xf18);
@@ -1912,6 +2026,8 @@ static WDecision ascendance_musou_command(void *a,WObservation *o,unsigned raw,u
         }
         return d;
     }
+    if(musou.valor&&musou.phase==MUSOU_CUT&&frame>=24&&o->base.held==ML_R&&(edge&PAD_R))
+        ascendance.valor_follow_key=ML_R;
     /* The reused Iai actions supply animation and collision. Do not
      * consume ordinary Iai follow-ups or award their spirit regeneration. */
     o->base.held=0;o->contact=0;
@@ -2379,7 +2495,7 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
         return ascendance_pursuit_cuts(a,o,edge);
     }
     if(ascendance_owner(a)&&(ascendance.radiance==RADIANCE_FLASH||ascendance.radiance==RADIANCE_CHASE))
-        return ascendance_pursuit_command(a,o,edge);
+        return ascendance_pursuit_command(a,o,raw,edge);
 #if ML_WILDS_MOVES
     WDecision red=ascendance_red_musou_command(a,o,edge);
     if(red.kind!=W_KEEP)return red;
@@ -2400,11 +2516,12 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
     if(ascendance.radiance!=RADIANCE_HOLD||!ascendance_owner(a)||world.move!=W_SHEATHE)
         return (WDecision){0};
     if(!o->grounded||!o->alive||!o->resources_ready)return (WDecision){0};
+    unsigned holding=raw&(PAD_X|PAD_A);
     unsigned ready=w_iai_ready(&world,o);
     if(ready&&ascendance.radiance_sample!=o->base.sample_sequence){
         ascendance.radiance_sample=o->base.sample_sequence;
         float frames=o->base.simulation_delta;
-        if(!ascendance.flash_step_release&&(keys&RADIANCE_INPUT)&&frames>0&&frames<30){
+        if(!ascendance.flash_step_release&&holding&&frames>0&&frames<30){
             typedef void *(__attribute__((pcs("aapcs-vfp"))) *StaminaDelta)(void *,int,float);
             ((StaminaDelta)(main_base+0x2a3e50))(a,1,-2.5f*frames);
             if(ascendance.remaining>0&&real(a,RADIANCE_STAMINA)>0&&ascendance_walk_available(a))
@@ -2422,7 +2539,7 @@ static WDecision ascendance_radiance_command(void *a,WObservation *o,unsigned ra
         }
     }
     float stamina=real(a,RADIANCE_STAMINA);
-    if(ready&&(!(keys&RADIANCE_INPUT)||ascendance.remaining<=0||stamina<=0||
+    if(ready&&(!holding||ascendance.remaining<=0||stamina<=0||
                ascendance.flash_step_release)){
         /* Keep the bound stance through the last floor update of a short drop. */
         if(radiance_step.actor==a&&radiance_step.area==byte(a,AREA)){

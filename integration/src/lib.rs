@@ -4,6 +4,8 @@
 mod radiance;
 #[cfg(all(ml_ascendance_prototype, not(ml_switch_no_overlay)))]
 mod boost_hud;
+#[cfg(all(ml_world_combat, not(ml_switch_no_overlay)))]
+mod wound_fx;
 use core::sync::atomic::{AtomicU32,AtomicU64,Ordering};
 use forge::log::prelude::*;
 static BASE:AtomicU32=AtomicU32::new(0);
@@ -123,9 +125,9 @@ extern "C" fn ml_wilds_focus(value: u32) {
 
 #[cfg(ml_world_combat)]
 #[unsafe(no_mangle)]
-extern "C" fn ml_wilds_wound(slot: u32, value: u32, damage: u32) {
+extern "C" fn ml_wilds_wound(slot: u32, value: u32, detail: u32) {
     if let Some(marker) = WILDS_WOUNDS.get(slot as usize) {
-        marker.store(((damage as u64) << 32) | value as u64, Ordering::Relaxed);
+        marker.store(((detail as u64) << 32) | value as u64, Ordering::Relaxed);
     }
 }
 
@@ -141,7 +143,7 @@ extern "C" fn ml_gauge_glow(value: u32) {
     GAUGE_GLOW.store(value, Ordering::Relaxed);
 }
 
-#[cfg(all(ml_ascendance_prototype, not(ml_switch_no_overlay)))]
+#[cfg(all(any(ml_ascendance_prototype, ml_world_combat), not(ml_switch_no_overlay)))]
 fn fill_overlay_polygon(dl: &forge::imgui::draw::DrawList, points: &[forge::sys::imgui::ImVec2], color: u32) {
     // Some Android Forge builds mirror just the first guest array element.
     // Build the path on the host through the by-value point API.
@@ -191,45 +193,7 @@ fn draw_gauge_glow() {
     #[cfg(all(ml_ascendance_prototype, ml_world_presentation))]
     radiance::draw(&dl, size, scale);
     if value == 0 && charge == 0 && focus == 0 && lock_hint == 0 && boost == 0 && wounds.iter().all(|&wound| wound == 0) { return; }
-    for wound in wounds {
-        if wound == 0 { continue; }
-        let x = ((wound & 4095) as f32 / 4094.0) * size.x;
-        let y = (1.0 - ((wound >> 12) & 4095) as f32 / 4094.0) * size.y;
-        let kind = (wound as u32) >> 24;
-        let broken = kind >= 2;
-        let radius = if broken { 20.0 } else { 13.0 };
-        let center = ImVec2::new(x, y);
-        let (r, g, b) = if broken { (255, 185, 78) } else { (246, 86, 51) };
-        for (size, opacity) in [(1.0, 7), (0.83, 10), (0.66, 13), (0.5, 16), (0.34, 19)] {
-            dl.add_circle_filled(center, radius * size * scale, color(r, g, b, opacity), 20);
-        }
-        if !broken {
-            let point = |dx: f32, dy: f32| ImVec2::new(x + dx * scale, y + dy * scale);
-            let crack = [((-6.0, -5.5), (-2.0, -2.0)), ((-2.0, -2.0), (1.0, -3.0)),
-                ((1.0, -3.0), (2.0, 1.5)), ((2.0, 1.5), (6.0, 4.5)),
-                ((2.0, 1.5), (-1.0, 5.5))];
-            for (tint, width) in [(color(32, 15, 23, 235), 3.7), (color(255, 245, 203, 255), 1.5)] {
-                for &((x1, y1), (x2, y2)) in &crack {
-                    dl.add_line(point(x1, y1), point(x2, y2), tint, width * scale);
-                }
-            }
-        }
-        let mut amount = (wound >> 32) as u32;
-        if broken && amount > 0 {
-            let mut digits = [b'0'; 10];
-            let mut start = digits.len();
-            while amount > 0 {
-                start -= 1;
-                digits[start] += (amount % 10) as u8;
-                amount /= 10;
-            }
-            if let Ok(label) = core::str::from_utf8(&digits[start..]) {
-                let pos = ImVec2::new(x + 6.0 * scale, y - 20.0 * scale);
-                dl.add_text(ImVec2::new(pos.x + scale, pos.y + scale), color(32, 14, 6, 255), label);
-                dl.add_text(pos, color(255, 208, 99, 255), label);
-            }
-        }
-    }
+    wound_fx::draw(&dl, size, scale, &wounds);
     if lock_hint != 0 {
         #[cfg(all(ml_wilds_moves, ml_recomp_runtime))]
         let right_offset = if size.x > size.y * (16.0 / 9.0) {

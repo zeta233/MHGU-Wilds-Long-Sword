@@ -116,21 +116,11 @@ pub fn draw(dl: &DrawList, size: ImVec2, scale: f32) {
                     lens(dl,origin,ray,length,7.0*scale,(233,75,72,strength(34.0*light*spread)));
                 }
             }
-            3 if end != 0 && span >= 4.0*scale => {
-                let gain = (state >> 48) as f32 / 255.0;
-                let length = span*0.54;
-                let mid = ImVec2::new((center.x+tip.x)*0.5,(center.y+tip.y)*0.5);
-                let flicker = (forge::imgui::item::get_time()*16.0) as f32;
-                let wave = (1.0-2.0*(flicker-flicker as u32 as f32)).abs();
-                streak(dl,mid,axis,length,8.5*scale,0.21,(234,69,35,strength(64.0*gain)));
-                streak(dl,mid,axis,length*0.97,(4.4+1.3*wave)*scale,0.21,(255,133,48,strength(104.0*gain)));
-                streak(dl,mid,axis,length*0.96,2.0*scale,0.21,(255,221,142,strength(125.0*gain)));
-            }
             4..=15 if end != 0 => {
                 let gain = (state >> 48) as f32 / 255.0;
-                let length = (span*0.72).clamp(1.7*scale, 7.0*scale);
-                lens(dl,center,axis,length,1.6*scale,(247,112,33,strength(128.0*gain)));
-                lens(dl,center,axis,length*0.82,0.73*scale,(255,221,145,strength(246.0*gain)));
+                let length = (span*0.72).clamp(1.0*scale, 3.5*scale);
+                lens(dl,center,axis,length,1.0*scale,(255,125,53,strength(88.0*gain)));
+                lens(dl,center,axis,length*0.68,0.55*scale,(255,225,166,strength(224.0*gain)));
             }
             _ => {}
         }

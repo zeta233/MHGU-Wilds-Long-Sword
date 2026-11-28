@@ -31,9 +31,9 @@ static inline unsigned w_focus_finisher_end(unsigned source)
     }
 }
 enum { W_CRIMSON_DIRECTIONAL=1,W_CRIMSON_LATERAL };
-enum { W_KEEP,W_ENTER,W_NATIVE,W_IDLE,W_ROLL,W_ABORT,W_NATIVE_R,W_MOTION };
+enum { W_KEEP,W_ENTER,W_NATIVE,W_IDLE,W_ROLL,W_ABORT,W_NATIVE_R,W_MOTION,W_VALOR_SHEATHE };
 enum { W_RED_ROUND=1,W_RED_IAI=2 };
-enum { W_VALOR_COUNTER_GAIN=200,W_VALOR_HELM_GAIN=300,W_VALOR_RELEASE_END=106 };
+enum { W_VALOR_COUNTER_GAIN=200,W_VALOR_WOUND_GAIN=250,W_VALOR_HELM_GAIN=300,W_VALOR_RELEASE_END=106 };
 enum { W_RELEASE_SEAT_START=118,W_RELEASE_SEAT_ALIGN=132,W_RELEASE_SHEATHE_FRAME=140,W_RELEASE_RECOVERY_CANCEL=205 };
 /* The roundslash archive removes 48 frames from the original GU timeline. */
 enum { W_ROUND_TAIL_FRAME=62,W_ROUND_CUT_FRAMES=48,W_ROUND_SHEATHE_FRAME=80,W_ROUND_FRAMES=111 };
@@ -87,7 +87,7 @@ typedef struct {
     float spirit_crimson_confirm;
     float wilds_gauge_fraction;
     unsigned wilds_roll_mod,wilds_roll_heading,wilds_r_pending;
-    unsigned wilds_r_direction,wilds_iai_recovered,wilds_focus_break,iai_focus_locked;
+    unsigned wilds_r_direction,wilds_iai_recovered,wilds_focus_break,wilds_focus_wounds,iai_focus_locked;
     unsigned iai_follow_keys;
     float iai_follow_wait;
     float wilds_r_wait;
@@ -263,6 +263,7 @@ WDecision w_dividing_sheathe(WState *s,const WObservation *o);
 WDecision w_radiance_enter(WState *s,const WObservation *o,unsigned move);
 WDecision w_radiance_pursuit_enter(WState *s,const WObservation *o);
 WDecision w_valor_radiance_enter(WState *s,const WObservation *o,unsigned slot);
+WDecision w_valor_musou_enter(WState *s,const WObservation *o,unsigned move);
 #endif
 WDecision w_step(WState *s,const WObservation *o);
 WDecision w_leave(WState *s);

@@ -1094,6 +1094,72 @@ static unsigned valor_release_grip_return(void *a,void *blade,unsigned motion,un
     *joint=12;*closed=0;return 1;
 }
 #endif
+#if ML_WORLD_COMBAT && ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE
+static unsigned world_valor_sheathe_grip(void *a);
+static struct {
+    void *actor,*blade;
+    unsigned area,joint;
+    float pose[12];
+} valor_evade_hand;
+
+static struct {
+    void *actor,*object;
+    unsigned area,motion,joint,sample,blending;
+    float first_frame,last_frame,start[7];
+} equipment_handoff[2];
+
+static unsigned equipment_handoff_pose(void *a,void *object,unsigned ix,unsigned motion,
+                                       unsigned posed,float *pose,u32 *joint,u32 *closed)
+{
+    __typeof__(equipment_handoff[0]) *bridge=equipment_handoff+ix;
+    unsigned area=byte(a,AREA),native_joint=word(object,0x13cc);
+    unsigned target=posed?*joint:native_joint;
+    unsigned valid=bridge->actor==a&&bridge->object==object&&bridge->area==area&&
+        sample_sequence-bridge->sample<=10;
+    unsigned changed=valid&&(bridge->motion!=motion||bridge->joint!=target);
+    float frame=real(a,FRAME);
+    if(!valid||changed||frame<bridge->last_frame){
+        unsigned in_double=double_draw_slot(motion-0x500);
+        unsigned was_double=double_draw_slot(bridge->motion-0x500);
+        unsigned action=u16(a,ACTION);
+        unsigned roll=motion<0x100&&u16(a,STATE)==1&&(action==6||action==13||action==14);
+        /* The incoming clip already animates the gripping hand. Carrying the
+         * previous world-space blade pose here makes the hilt slide out of it. */
+        unsigned valor_double=changed&&hunter_style(a)==5&&
+            ((ix==1&&in_double)||(was_double&&
+                (motion==0x5c0||motion==0x568||motion==0x501||roll)));
+        unsigned small_iai=ix==1&&changed&&motion==0x500+238&&bridge->motion==motion&&
+            bridge->joint==8&&target==2;
+        bridge->first_frame=frame;
+        /* Keep the evaluated pose on the switching frame, expressed in the new socket. */
+        bridge->blending=(valor_double||small_iai)&&bridge->joint!=target&&target<255&&
+            equipment_joint_pose(a,object,target,bridge->start);
+    }
+    bridge->actor=a;bridge->object=object;bridge->area=area;bridge->motion=motion;
+    bridge->joint=target;bridge->last_frame=frame;bridge->sample=sample_sequence;
+    float t=(frame-bridge->first_frame)/(ix==1?8.f:5.f);
+    if(!bridge->blending||!(t>=0.f&&t<1.f)){
+        bridge->blending=0;
+        return posed;
+    }
+    if(!posed){
+        for(unsigned i=0;i<12;++i)pose[i]=real(object,0x40+4*i);
+        *joint=target;*closed=word(object,0x13d4)==2;
+    }
+    t=t*t*(3.f-2.f*t);
+    for(unsigned i=0;i<3;++i)pose[i]=bridge->start[i]+t*(pose[i]-bridge->start[i]);
+    float dot=0.f,length=0.f;
+    for(unsigned i=0;i<4;++i)dot+=bridge->start[3+i]*pose[4+i];
+    for(unsigned i=0;i<4;++i){
+        pose[4+i]=(1.f-t)*bridge->start[3+i]+(dot<0.f?-t:t)*pose[4+i];
+        length+=pose[4+i]*pose[4+i];
+    }
+    if(!(length>.00001f))return posed;
+    length=att_sqrt(length);
+    for(unsigned i=4;i<8;++i)pose[i]/=length;
+    return 1;
+}
+#endif
 static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
 {
     void *a=(void *)(uptr)owner;
@@ -1119,6 +1185,44 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
     float pose[12];u32 joint,closed;
     if((role!=9&&role!=10)||!local_supported(a))return original_placement(object,owner,native_role,flags);
     unsigned motion=u16(a,MOTION),private_pose=0,round_seat=0,round_scabbard=0,release_seat=0;
+    u32 result;
+#if ML_WORLD_COMBAT && ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE
+    if(role==9&&world_valor_sheathe_grip(a)){
+        /* Use this weapon's native drawn socket on the current hand bones.
+         * The dodge clip and its movement exit also select a back socket. */
+        *(uint16_t *)((uptr)a+MOTION)=0x501;
+        result=original_placement(object,owner,native_role,flags);
+        *(uint16_t *)((uptr)a+MOTION)=(uint16_t)motion;
+        holster[ix].object=0;handoff.actor=0;
+        unsigned socket=word(object,0x13cc),kind=word(object,0x13d4);
+        unsigned hand=kind==1&&(socket==8||socket==12);
+        if(hand){
+            valor_evade_hand.actor=a;valor_evade_hand.blade=object;
+            valor_evade_hand.area=byte(a,AREA);valor_evade_hand.joint=socket;
+            for(unsigned i=0;i<12;++i)valor_evade_hand.pose[i]=real(object,0x40+4*i);
+        }
+        /* The native movement action can insist on the back even with the
+         * drawn motion ID. Carry the same weapon's hand-local pose across it. */
+        unsigned carry=!hand&&valor_evade_hand.actor==a&&valor_evade_hand.blade==object&&
+            valor_evade_hand.area==byte(a,AREA);
+#if ML_TRACE_EVENTS
+        static unsigned grip_bind;
+        if(grip_bind!=bind_generation){
+            grip_bind=bind_generation;
+            log_event("valor_evade_grip",owner,motion,carry?valor_evade_hand.joint:socket,carry?1:kind);
+        }
+#endif
+        if(carry){
+            joint=valor_evade_hand.joint;closed=0;
+            for(unsigned i=0;i<12;++i)pose[i]=valor_evade_hand.pose[i];
+            equipment_handoff_pose(a,object,ix,motion,1,pose,&joint,&closed);
+            goto apply_attachment;
+        }
+        if(equipment_handoff_pose(a,object,ix,motion,0,pose,&joint,&closed))
+            goto apply_attachment;
+        return result;
+    }
+#endif
 #if ML_WILDS_MOVES
     unsigned charged_round=role==9&&motion==0x500+219;
     round_seat=charged_round&&real(a,FRAME)>=W_ROUND_SHEATHE_FRAME;
@@ -1141,7 +1245,7 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
 #endif
     /* The sheathed tails use the model's native stowed placement. */
     if(round_seat||release_seat)*(uint16_t *)((uptr)a+MOTION)=1;
-    u32 result=original_placement(object,owner,native_role,flags);
+    result=original_placement(object,owner,native_role,flags);
     if(round_seat||release_seat)*(uint16_t *)((uptr)a+MOTION)=(uint16_t)motion;
 #if ML_ASCENDANCE_PROTOTYPE
     if(enhanced_sheathe)*(uint16_t *)((uptr)a+MOTION)=(uint16_t)motion;
@@ -1165,7 +1269,13 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
         for(unsigned i=0;i<12;++i)back_rest[ix].pose[i]=real(object,0x40+4*i);
     }
 #if ML_ASCENDANCE_PROTOTYPE
-    if(scabbard&&!round_scabbard&&!flash&&!pursuit&&!musou_stance_motion(motion)&&motion!=0x500+32&&motion!=0x500+41&&!double_draw_motion(motion)&&motion!=0x500+230&&motion!=0x500+RADIANCE_WALK_SLOT&&motion!=0x500+ENHANCED_SHEATHE_SLOT)return result;
+    if(scabbard&&!round_scabbard&&!flash&&!pursuit&&!musou_stance_motion(motion)&&motion!=0x500+32&&motion!=0x500+41&&!double_draw_motion(motion)&&motion!=0x500+230&&motion!=0x500+RADIANCE_WALK_SLOT&&motion!=0x500+ENHANCED_SHEATHE_SLOT){
+#if ML_WORLD_COMBAT && ML_WILDS_MOVES
+        if(equipment_handoff_pose(a,object,ix,motion,0,pose,&joint,&closed))
+            goto apply_attachment;
+#endif
+        return result;
+    }
 #else
     if(scabbard&&!round_scabbard&&motion!=0x500+230)return result;
 #endif
@@ -1229,11 +1339,11 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
     if(role==9)posed=valor_release_grip_return(a,object,motion,posed,pose,&joint,&closed);
 #endif
     if(posed)holster[ix].object=0;
-    else if(round_seat||!holster_pose(a,object,ix,prior,pose,&joint,&closed))return result;
+    else if(!round_seat)posed=holster_pose(a,object,ix,prior,pose,&joint,&closed);
 #if ML_WILDS_MOVES
 #if ML_ASCENDANCE_PROTOTYPE
     float seat_begin=motion==0x500+41?52:12;
-    if(role==9&&(motion==0x500+DOUBLE_DRAW_RETURN||motion==0x500+41)&&real(a,FRAME)>=seat_begin){
+    if(posed&&role==9&&(motion==0x500+DOUBLE_DRAW_RETURN||motion==0x500+41)&&real(a,FRAME)>=seat_begin){
         float seated[12];
         for(unsigned i=0;i<12;++i)seated[i]=pose[i];
         u32 parent=joint;
@@ -1262,14 +1372,21 @@ static u32 preview_placement(void *object,u32 owner,u32 native_role,u32 flags)
             }
         }
     }
-    if(role==9&&motion==0x500+ENHANCED_SHEATHE_SLOT)enhanced_sheathe_insert(a,pose,&joint,closed);
-    else if(role==9&&closed&&(musou_stance_motion(motion)||motion==0x500+32||motion==0x500+230||motion==0x500+RADIANCE_WALK_SLOT))
+    if(posed&&role==9&&motion==0x500+ENHANCED_SHEATHE_SLOT)enhanced_sheathe_insert(a,pose,&joint,closed);
+    else if(posed&&role==9&&closed&&(musou_stance_motion(motion)||motion==0x500+32||motion==0x500+230||motion==0x500+RADIANCE_WALK_SLOT))
         seat_special_sheathe(a,pose,&joint);
 #else
-    if(role==9&&motion==0x500+230&&closed)seat_special_sheathe(a,pose,&joint);
+    if(posed&&role==9&&motion==0x500+230&&closed)seat_special_sheathe(a,pose,&joint);
 #endif
-    if(role==9&&private_pose&&joint==12&&!closed)blend_entry_grip(a,object,motion,pose);
+    if(posed&&role==9&&private_pose&&joint==12&&!closed)blend_entry_grip(a,object,motion,pose);
     else if(role==9)handoff.actor=0;
+#endif
+#if ML_WORLD_COMBAT && ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE
+    posed=equipment_handoff_pose(a,object,ix,motion,posed,pose,&joint,&closed);
+#endif
+    if(!posed)return result;
+#if ML_WORLD_COMBAT && ML_WILDS_MOVES && ML_ASCENDANCE_PROTOTYPE
+apply_attachment:
 #endif
     attachment_native[ix].object=(u32)(uptr)object;attachment_native[ix].owner=owner;
     for(unsigned i=0;i<12;++i)attachment_native[ix].pose[i]=word(object,0x40+4*i);
@@ -1497,6 +1614,13 @@ static uptr __attribute__((pcs("aapcs-vfp"))) layer_hook(void *a,u32 layer,u32 m
     }
 #endif
 #if ML_WORLD_COMBAT
+#if ML_ASCENDANCE_PROTOTYPE && ML_WILDS_MOVES
+    if(!layer&&motion==5001&&world_valor_sheathe_owned(a)&&valor_sheathe.recovery_sample&&
+       sample_sequence-valor_sheathe.recovery_sample<=4&&u16(a,STATE)==1&&u16(a,ACTION)==0&&blend<7.f){
+        flags|=0x81u;blend=7.f;
+        valor_sheathe.recovery_sample=0;
+    }
+#endif
 #if ML_WILDS_MOVES
     if(!layer&&motion!=0xffffu&&art_entry_blend.owner==a){
         unsigned valid=art_entry_blend.epoch==byte(a,AREA)&&sample_sequence-art_entry_blend.sample<=8u;
@@ -1582,6 +1706,10 @@ static uptr __attribute__((pcs("aapcs-vfp"))) layer_hook(void *a,u32 layer,u32 m
 #endif
 #endif
     uptr result=original_layer(a,layer,motion,flags,blend,start,speed);
+#if ML_WORLD_COMBAT && ML_ASCENDANCE_PROTOTYPE && ML_WILDS_MOVES
+    if(layer==0&&motion==5000+VALOR_SHEATHE_EVADE_SLOT&&local_supported(a))
+        world_valor_sheathe_keep_drawn(a);
+#endif
     if(layer==0&&motion!=0xffffu&&local_supported(a)){
         if(bind_actor!=a){bind_actor=a;bind_generation=0;}
         ++bind_generation;

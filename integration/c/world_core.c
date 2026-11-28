@@ -440,7 +440,7 @@ static WDecision enter_move(WState *s,const WObservation *o,unsigned move,unsign
     s->wilds_previous=o->base.held;s->wilds_sample=o->base.sample_sequence;
     s->slot=w_clip(s->source)->slot;s->bound=0;s->last_frame=0;
     s->counter_success=s->hit_success=s->rank_paid=s->follow_ready=0;
-    s->wilds_iai_recovered=s->wilds_focus_break=s->iai_focus_locked=0;
+    s->wilds_iai_recovered=s->wilds_focus_break=s->wilds_focus_wounds=s->iai_focus_locked=0;
     s->iai_follow_keys=0;s->iai_follow_wait=0;
     s->hold_seconds=0;s->consumed|=mask;s->queued=0;
     s->ground_node=s->main_source=0;s->entry_start=0;
@@ -525,6 +525,12 @@ WDecision w_valor_radiance_enter(WState *s,const WObservation *o,unsigned slot)
     WDecision d=enter_move(s,o,slot==RADIANCE_FLASH_SLOT?W_BIG:W_SMALL,0,1);
     s->slot=d.slot=slot;
     return d;
+}
+WDecision w_valor_musou_enter(WState *s,const WObservation *o,unsigned move)
+{
+    if(!o->valor_style||!o->alive||!o->grounded||!o->drawn||!o->resources_ready||
+       (move!=W_SMALL&&move!=W_BIG))return (WDecision){0};
+    return enter_move(s,o,move,0,1);
 }
 WDecision w_radiance_pursuit_enter(WState *s,const WObservation *o)
 {

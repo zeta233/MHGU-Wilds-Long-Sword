@@ -403,14 +403,18 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
     if(s->red_foresight_chain&&s->source==109)return wilds_red_round_step(s,o);
     if(s->move>=W_CHIJIN||s->source==918){
         unsigned end=s->move==W_FOCUS&&s->wilds_focus_break?w_focus_finisher_end(s->source):0;
+        unsigned wounds=s->wilds_focus_wounds;
         WDecision d=wilds_step(s,o);
         /* The completed finisher owns the promotion. Early forced exits
          * and internal motion changes never settle it. */
-        if(end&&b->animation_frame>=end&&
+        if(wounds&&end&&b->animation_frame>=end&&
            (d.kind==W_IDLE||d.kind==W_ENTER||d.kind==W_NATIVE||d.kind==W_NATIVE_R||d.kind==W_ROLL)){
             if(o->valor_style){
                 if(!o->valor)d.valor_gain=W_VALOR_COUNTER_GAIN;
-            }else if(o->rank<3)++d.rank_delta;
+            }else if(o->rank<3){
+                unsigned levels=3-o->rank;
+                d.rank_delta+=(int)(wounds<levels?wounds:levels);
+            }
         }
         return d;
     }

@@ -188,8 +188,8 @@ static void world_flash_offset(void *a,void *owner,unsigned type,OffsetRule rule
     /* Uncounterable attacks are rejected before reaching this function. */
     rule=ascendance.flash_offset_rule=OFFSET_FORCE;
     ascendance.flash_offset_due=world_elapsed;
-    ascendance_offset_test_target(owner);
 #endif
+    ascendance_offset_target(owner);
     world_counter_accept(a,type);
     if(rule!=OFFSET_NORMAL)log_event("ascendance_offset_rule",(u32)(uptr)owner,rule,(u32)(real(a,FRAME)*1000),type);
     ascendance_flash_offset_credit();
@@ -266,6 +266,11 @@ static u32 world_attack_shapes(void *manager)
 {
     u32 result=world_original_attack_shapes(manager);
     void *a=(void *)(uptr)world.actor;
+#if ML_WILDS_MOVES
+    if(a&&world_bound&&world.move==W_FOCUS&&world.source==905&&world_attack_owned&&
+       world_attack_actor==world.actor&&u16(a,0x3054)==world_attack_id)
+        world_sweep_focus_wounds(a,manager,(const void *)((uptr)a+0x3020));
+#endif
     if(!a||!world.move||!world_bound||world_counter_seen)return result;
     /* Native16b15c performs damage-packet and previous-attack-ID filtering
      * before16bb38. Counter shells must not inherit those body-only filters.

@@ -2,6 +2,8 @@
  * bone's space so the effect follows the same spot as the monster poses. */
 #include "world_wound_surface.inc"
 enum { WOUND_MONSTERS=10, WOUND_PARTS=8, WOUND_MARKERS=12 };
+enum { WOUND_REACTION_DEFEAT=1, WOUND_REACTION_FLINCH=2, WOUND_REACTION_HEAVY=3 };
+static const float wound_break_flash_time=.85f;
 typedef struct {
     unsigned progress;
     float until,recover,flash;
@@ -19,21 +21,15 @@ typedef struct {
 } WMonsterWounds;
 static WMonsterWounds wilds_wounds[WOUND_MONSTERS];
 static unsigned wilds_wound_owner,wilds_wound_zone;
-static struct {
+typedef struct {
     void *target,*status;
-    unsigned actor,area,id,slot,region,bonus;
-} focus_burst;
-static struct {
-    void *target,*status;
-    unsigned actor,area,slot,blocked,pending,deflected_region;
-} wound_execution;
+    unsigned actor,area,id,slot,eligible,regions;
+    unsigned blocked,pending,deflected_region,settled,count;
+    unsigned char order[WOUND_PARTS];
+} WWoundExecution;
+static WWoundExecution wound_execution[WOUND_MONSTERS];
 static int (*world_original_monster_reaction)(void *);
 static int (*world_original_monster_action)(void *,unsigned,unsigned,unsigned);
-static struct {
-    void *target,*status;
-    unsigned area,action,blocked_attack;
-    float started,until,extra;
-} monster_recovery[WOUND_MONSTERS];
 
 extern void ml_wilds_wound(unsigned,unsigned,unsigned);
 
@@ -42,101 +38,58 @@ static void world_wound_owner(void *a)
     unsigned area=byte(a,AREA);
     if(wilds_wound_owner!=(u32)(uptr)a||(area==0&&wilds_wound_zone!=0)){
         for(unsigned i=0;i<WOUND_MONSTERS;++i)wilds_wounds[i]=(WMonsterWounds){0};
-        wound_execution.target=0;
-        for(unsigned i=0;i<WOUND_MONSTERS;++i)monster_recovery[i].target=0;
+        for(unsigned i=0;i<WOUND_MONSTERS;++i)wound_execution[i]=(WWoundExecution){0};
         wilds_wound_owner=(u32)(uptr)a;
     }
     wilds_wound_zone=area;
 }
 
-static void world_end_wound_execution(void)
+static WWoundExecution *world_wound_execution_for(void *target)
 {
-    if(wound_execution.target)
-        log_event("wilds_wound_hold_end",(u32)(uptr)wound_execution.target,
-            wound_execution.actor,(u32)(world_elapsed*1000),0);
-    wound_execution.target=0;
+    for(unsigned i=0;i<WOUND_MONSTERS;++i)
+        if(wound_execution[i].target==target&&wound_execution[i].regions)return wound_execution+i;
+    return 0;
 }
+
+static unsigned world_release_wound_target(WWoundExecution *execution,void *actor);
 
 static unsigned world_wound_holds_action(void *target,void *status,unsigned group,unsigned action)
 {
-    if(target!=wound_execution.target)return 0;
-    void *actor=(void *)(uptr)wound_execution.actor;
-    unsigned area=wound_execution.area;
-    if(status!=wound_execution.status||!status||byte(target,AREA)!=area||
-       world.actor!=wound_execution.actor||byte(actor,AREA)!=area||
+    WWoundExecution *execution=world_wound_execution_for(target);
+    if(!execution)return 0;
+    void *actor=(void *)(uptr)execution->actor;
+    unsigned area=execution->area;
+    if(status!=execution->status||!status||byte(target,AREA)!=area||
+       world.actor!=execution->actor||byte(actor,AREA)!=area||
        world.move!=W_FOCUS||!world.wilds_focus_break||
        u16(actor,STATE)!=16||u16(actor,ACTION)!=w_action(W_FOCUS)||
        (int)word(status,0x370)<=0){
-        world_end_wound_execution();
-        return 0;
+        return world_release_wound_target(execution,actor)&&group<10;
     }
-    /* The monster can finish its native recoil or enter a stronger
-     * reaction. Its normal AI cannot resume until the finisher exits. */
+    /* A stronger native reaction can still take priority. */
     if(!group||group>=10)return 0;
-    if(!wound_execution.blocked){
-        wound_execution.blocked=1;
+    if(!execution->blocked){
+        execution->blocked=1;
         log_event("wilds_wound_hold",(u32)(uptr)target,world.source,
             (group<<8)|action,(u32)real(actor,FRAME));
     }
     return 1;
 }
 
-/* Keep the native stagger animation and give grounded reactions a short
- * recovery before the monster can attack. Wilds ground clips sampled at
- * 60 Hz start at 290 frames for Offset and 250 for wound destruction.
- * Cap the added time so a short or interrupted GU clip does not leave a
- * monster in an extended idle pose. */
-static void world_start_monster_recovery(void *target,void *status,unsigned action,unsigned offset)
-{
-    if(!world_original_monster_action||(action&255)!=10||(action>>8)>=13)return;
-    unsigned uid=byte(status,0x1b5);
-    if(uid>=WOUND_MONSTERS||world_monster(uid)!=target)return;
-    monster_recovery[uid]=(__typeof__(monster_recovery[uid])){
-        target,status,byte(target,AREA),action,0,world_elapsed,
-        world_elapsed+(offset?290.f:250.f)/60.f,offset?1.5f:1.25f
-    };
-}
-
 static int world_monster_action(void *target,unsigned group,unsigned action,unsigned mode)
 {
     void *status=(void *)(uptr)word(target,0x1428);
     if(world_wound_holds_action(target,status,group,action))return 0;
-    unsigned uid=status?byte(status,0x1b5):WOUND_MONSTERS;
-    if(uid>=WOUND_MONSTERS||target!=monster_recovery[uid].target)
-        return world_original_monster_action(target,group,action,mode);
-    __typeof__(monster_recovery[0]) *r=monster_recovery+uid;
-    unsigned before=u16(target,0x73e0);
-    if(status!=r->status||byte(target,AREA)!=r->area||r->area!=wilds_wound_zone||
-       (int)word(status,0x370)<=0||world_elapsed>=r->until||
-       ((before&255)>=10&&before!=r->action)){
-        r->target=0;
-    }else if(group==7&&mode==0&&before!=r->action){
-        if(!r->blocked_attack){
-            r->blocked_attack=1;
-            log_event("world_reaction_attack_wait",(u32)(uptr)target,before,action,
-                (u32)((r->until-world_elapsed)*1000));
-        }
-        return 0;
-    }
-    int result=world_original_monster_action(target,group,action,mode);
-    unsigned after=u16(target,0x73e0);
-    if(r->target&&before==r->action&&after!=before){
-        if((after&255)!=0&&(after&255)!=1){
-            r->target=0;
-        }else{
-            float limit=world_elapsed+r->extra;
-            if(limit<r->until)r->until=limit;
-            log_event("world_reaction_recovery",(u32)(uptr)target,before,
-                (u32)((world_elapsed-r->started)*1000),(u32)((r->until-world_elapsed)*1000));
-        }
-    }
-    return result;
+    return world_original_monster_action(target,group,action,mode);
 }
 
 /* Ask GU's damage dispatcher for a species- and part-specific heavy
  * reaction. Its action state machine owns recovery and stronger reactions. */
 static int world_request_part_reaction(void *target,void *status,unsigned region,unsigned kind)
 {
+    /* GU reaction 1 dispatches defeat even with positive HP. This adapter
+     * may request only the two native part-hit reactions we defer. */
+    if(kind!=WOUND_REACTION_FLINCH&&kind!=WOUND_REACTION_HEAVY)return 0;
     uint16_t *reaction=(uint16_t *)((uptr)status+0x3ae);
     unsigned char *part=(unsigned char *)((uptr)status+0x3b2),previous=*part;
     *part=(unsigned char)region;
@@ -149,36 +102,61 @@ static int world_request_part_reaction(void *target,void *status,unsigned region
 
 static int world_request_heavy_reaction(void *target,void *status,unsigned region)
 {
-    return world_request_part_reaction(target,status,region,3);
+    return world_request_part_reaction(target,status,region,WOUND_REACTION_HEAVY);
 }
 
-static void world_abort_wound_execution(void *actor)
+static int world_request_ground_reaction(void *target,void *status,unsigned region)
 {
-    void *target=wound_execution.target,*status=wound_execution.status;
-    unsigned pending=wound_execution.pending,region=wound_execution.deflected_region;
-    world_end_wound_execution();
-    if(!target||!status||!pending||wound_execution.actor!=(u32)(uptr)actor||
-       byte(actor,AREA)!=wound_execution.area||
-       world_monster(wound_execution.slot)!=target||word(target,0x1428)!=(uptr)status||
-       byte(target,AREA)!=wound_execution.area||(int)word(status,0x370)<=0||
-       u16(status,0x3ae)||(u16(target,0x73e0)&255)>=10)return;
-    world_request_part_reaction(target,status,region,pending);
+    enum { GLAVENUS_VTABLE=0x17f1d44, GROUND_RECOIL=0x70a };
+    if(word(target,0)==main_base+GLAVENUS_VTABLE&&world_original_monster_action){
+        /* Its limb-specific dispatch can pick the hop. Use the native
+         * grounded heavy recoil, including its normal recovery animation. */
+        world_original_monster_action(target,GROUND_RECOIL&255,GROUND_RECOIL>>8,5);
+        if(u16(target,0x73e0)==GROUND_RECOIL){
+            *(uint16_t *)((uptr)status+0x3ae)=0;
+            return 1;
+        }
+    }
+    return world_request_heavy_reaction(target,status,region);
+}
+static unsigned world_finish_wound_recoil(void *target,void *status,unsigned region,unsigned deferred,unsigned deferred_region);
+
+static unsigned world_release_wound_target(WWoundExecution *execution,void *actor)
+{
+    WWoundExecution saved=*execution;
+    *execution=(WWoundExecution){0};
+    void *target=saved.target,*status=saved.status;
+    if(!saved.regions)return 0;
+    log_event("wilds_wound_hold_end",(u32)(uptr)target,saved.actor,(u32)(world_elapsed*1000),0);
+    if(saved.actor!=(u32)(uptr)actor||byte(actor,AREA)!=saved.area||
+       world_monster(saved.slot)!=target||word(target,0x1428)!=(u32)(uptr)status||
+       byte(target,AREA)!=saved.area||u16(status,0x1b6)!=saved.id||(int)word(status,0x370)<=0)return 0;
+    if(saved.settled)
+        return world_finish_wound_recoil(target,status,saved.order[0],saved.pending,saved.deflected_region);
+    if(saved.pending&&!u16(status,0x3ae)&&(u16(target,0x73e0)&255)<10)
+        return world_request_part_reaction(target,status,saved.deflected_region,saved.pending)!=0;
+    return 0;
+}
+
+static void world_release_wound_execution(void *actor)
+{
+    for(unsigned i=0;i<WOUND_MONSTERS;++i)
+        if(wound_execution[i].target)world_release_wound_target(wound_execution+i,actor);
 }
 
 static int world_monster_reaction(void *target)
 {
-    if(target==wound_execution.target&&focus_burst.target==target&&
-       world.move==W_FOCUS&&world.wilds_focus_break){
+    WWoundExecution *execution=world_wound_execution_for(target);
+    if(execution&&world.move==W_FOCUS&&world.wilds_focus_break){
         void *status=(void *)(uptr)word(target,0x1428);
-        if(status&&status==wound_execution.status&&byte(target,AREA)==wound_execution.area&&
+        if(status&&status==execution->status&&byte(target,AREA)==execution->area&&
            (int)word(status,0x370)>0){
             unsigned pending=u16(status,0x3ae);
-            /* These native flinches displace the target between blade windows.
-             * Preserve the strongest request for the end of the execution. */
-            if(pending&&pending<=3){
-                if(pending>=wound_execution.pending){
-                    wound_execution.pending=pending;
-                    wound_execution.deflected_region=byte(status,0x3b2);
+            /* These native flinches displace the target between blade windows. */
+            if(pending==WOUND_REACTION_FLINCH||pending==WOUND_REACTION_HEAVY){
+                if(pending>=execution->pending){
+                    execution->pending=pending;
+                    execution->deflected_region=byte(status,0x3b2);
                 }
                 *(uint16_t *)((uptr)status+0x3ae)=0;
                 return 0;
@@ -201,12 +179,9 @@ static int world_monster_reaction(void *target)
             }
 #endif
             if((before&255)>=10)return world_original_monster_reaction(target);
-            int result=world_request_heavy_reaction(target,radiance_pursuit.status,radiance_pursuit.region);
-            if(result){
+            int result=world_request_ground_reaction(target,radiance_pursuit.status,radiance_pursuit.region);
+            if(result)
                 ascendance_reaction_after(target,pending,before);
-                if(radiance_pursuit.confirmed)
-                    world_start_monster_recovery(target,radiance_pursuit.status,u16(target,0x73e0),1);
-            }
             return result;
         }
         int result=world_original_monster_reaction(target);
@@ -217,20 +192,19 @@ static int world_monster_reaction(void *target)
 #endif
 }
 
-static void world_finish_wound_recoil(void *target,void *status,unsigned region)
+static unsigned world_finish_wound_recoil(void *target,void *status,unsigned region,unsigned deferred,unsigned deferred_region)
 {
-    if((int)word(status,0x370)<=0)return;
+    if((int)word(status,0x370)<=0)return 0;
     unsigned before=u16(target,0x73e0),pending=u16(status,0x3ae);
     unsigned group=before&255;
-    if(group==10||group==11||group>=14||pending>3)return;
-    if(wound_execution.pending>=3&&pending<3)region=wound_execution.deflected_region;
-    if(pending==3)world_original_monster_reaction(target);
-    else world_request_heavy_reaction(target,status,region);
+    if(group==10||group==11||group>=14||pending==WOUND_REACTION_DEFEAT||pending>WOUND_REACTION_HEAVY)return 0;
+    if(deferred>=3&&pending<3)region=deferred_region;
+    if(pending==3)region=byte(status,0x3b2);
+    world_request_ground_reaction(target,status,region);
     unsigned action=u16(target,0x73e0);
-    if(before!=action&&((action&255)==10||(action&255)==11)){
-        world_start_monster_recovery(target,status,action,0);
-        log_event("wilds_wound_recoil",(u32)(uptr)target,region,before,action);
-    }
+    if(before==action||((action&255)!=10&&(action&255)!=11))return 0;
+    log_event("wilds_wound_recoil",(u32)(uptr)target,region,before,action);
+    return 1;
 }
 
 static unsigned world_wound_slot(const void *registry,const void *target)
@@ -307,32 +281,153 @@ static void world_wound_anchor(WWound *w,void *target,const void *part,const flo
         log_event("wilds_wound_surface",(u32)(uptr)target,w->part_index,w->surface.mesh,bone);
 }
 
-/* Settle the reserved wound once the directional finisher closes its last hitbox. */
-static void world_finish_focus_burst(void *actor,float frame)
+static void world_consume_wound(void *actor,WMonsterWounds *monster,unsigned region,unsigned bonus)
 {
-    if(!focus_burst.target)return;
-    unsigned end=w_focus_finisher_end(world.source);
-    if(!end||frame<end)return;
-    void *target=focus_burst.target,*status=focus_burst.status;
-    focus_burst.target=0;
-    const void *registry=(const void *)(uptr)word((void *)main_base,0x1851fe0);
-    if(world.move!=W_FOCUS||!world.wilds_focus_break||world.actor!=focus_burst.actor||
-       byte(actor,AREA)!=focus_burst.area||world_wound_slot(registry,target)!=focus_burst.slot||
-       word(target,0x1428)!=(u32)(uptr)status||byte(target,AREA)!=focus_burst.area||
-       u16(status,0x1b6)!=focus_burst.id||(int)word(status,0x370)<=0)return;
-    unsigned region=focus_burst.region,bonus=focus_burst.bonus;
-    WWound *w=wilds_wounds[focus_burst.slot].parts+region;
-    int applied=((int (*)(void *,unsigned,int,unsigned))(main_base+0x9d6f8))(target,region,(int)bonus,0);
+    WWound *w=monster->parts+region;
+    void *target=monster->target,*status=monster->status;
+    w->progress=0;w->until=0;w->recover=world_elapsed+12;
+    w->flash=world_elapsed+wound_break_flash_time;w->burst_shown=0;
+#if ML_ASCENDANCE_PROTOTYPE
+    ascendance_hit(actor,0,target,1,0);
+#endif
+    int applied=0;
+    if(bonus&&(int)word(status,0x370)>0)
+        applied=((int (*)(void *,unsigned,int,unsigned))(main_base+0x9d6f8))(target,region,(int)bonus,0);
     w->burst_damage=applied>0?(unsigned)applied:0;
-    w->flash=world_elapsed+.85f;w->burst_shown=0;
 #if ML_WORLD_PRESENTATION
-    WSurfaceModel model;WSurfaceVec pos,normal;
-    if(w->surface.model&&surface_model(&model,target)&&surface_sample(&model,target,&w->surface,&pos,&normal))
-        world_helm_impact(actor,&pos.x);
+    float point[3];
+    if(world_wound_position(target,w,point))world_helm_impact(actor,point);
 #endif
     log_event("wilds_wound_burst",region,world.source,bonus,w->burst_damage);
-    world_finish_wound_recoil(target,status,region);
-    wound_execution.pending=0;
+}
+
+#if ML_WILDS_MOVES
+static int world_wound_execution_valid(const WWoundExecution *execution,void *actor)
+{
+    void *target=execution->target,*status=execution->status;
+    return target&&execution->actor==(u32)(uptr)actor&&byte(actor,AREA)==execution->area&&
+        world_monster(execution->slot)==target&&byte(target,AREA)==execution->area&&
+        word(target,0x1428)==(u32)(uptr)status&&u16(status,0x1b6)==execution->id;
+}
+
+/* GU has no Wilds scar damage table. Calibrate the first three ordinary
+ * wounds from measured 0.6%, 1.0% and 1.4% of total health, and reuse the
+ * last measured rate for subsequent wounds. */
+static unsigned world_focus_wound_damage(const void *status,unsigned ordinal)
+{
+    unsigned rate=ordinal==0?6:ordinal==1?10:14;
+    int maximum=(int)word(status,0x374);
+    return maximum>0?(unsigned)(((uint64_t)(unsigned)maximum*rate+500)/1000):0;
+}
+
+static void world_collect_focus_wounds(void *manager,const void *attack,WWoundExecution *execution,unsigned direct_region,const float *contact_point)
+{
+    WMonsterWounds *monster=wilds_wounds+execution->slot;
+    unsigned candidates=execution->eligible&~execution->regions;
+    if(!candidates)return;
+    void *resource=(void *)(uptr)word(attack,0x84);
+    const void *group=resource?((const void *(*)(void *,unsigned))(*(uptr **)resource)[0x44/4])
+        (resource,word(attack,0x88)):0;
+    unsigned first=word(attack,0x1c),count=group?word(group,4):0;
+    if(first>=64||count>64-first)count=0;
+    /* The native contact wins simultaneous overlaps. Later samples append
+     * new regions to the same target's order. */
+    for(unsigned i=0;i<=WOUND_PARTS;++i){
+        if(!i&&direct_region==WOUND_PARTS)continue;
+        unsigned region=i?i-1:direct_region;
+        if(i&&region==direct_region)continue;
+        if(!(candidates&(1u<<region)))continue;
+        WWound *w=monster->parts+region;
+        if(w->until<=world_elapsed)continue;
+        float position[3];
+        unsigned posed=world_wound_position(execution->target,w,position);
+        /* GU reports only its winning hurt part. Test the exact thrust
+         * spheres against other wound anchors on that same native target. */
+        unsigned hit=!w->part_table&&region==direct_region;
+        _Alignas(16) float wound[12]={0};
+        if(posed){
+            for(unsigned k=0;k<3;++k)wound[k]=wound[4+k]=position[k];
+            wound[8]=36.f;
+            if(contact_point){
+                float distance=0;
+                for(unsigned k=0;k<3;++k){float d=position[k]-contact_point[k];distance+=d*d;}
+                hit=distance<=36.f*36.f;
+            }
+        }
+        unsigned first_type=0;
+        for(unsigned i=0;i<count&&posed&&!hit;++i){
+            const void *record=(const void *)((uptr)manager+0x2030+32*(first+i));
+            unsigned type=byte(record,0);
+            if(!i)first_type=type;
+            if(type<1||type>3)continue;
+            _Alignas(16) float shape[12]={0},contact[4]={0};
+            for(unsigned k=0;k<3;++k)shape[k]=real(record,8+4*k);
+            if(type==1)shape[3]=real(record,4);
+            else{
+                for(unsigned k=0;k<3;++k)shape[4+k]=real(record,20+4*k);
+                shape[8]=real(record,4);
+            }
+            unsigned fn=type==1?0x168198:type==2?0x167b5c:0x1683dc;
+            hit=((unsigned (*)(const void *,const void *,void *))(main_base+fn))(shape,wound,contact);
+        }
+        if(contact_point){
+            log_event("wilds_wound_overlap",region,direct_region,(count<<8)|posed,(first_type<<8)|hit);
+            if(posed)log_event("wilds_wound_overlap_distance",region,(int)(position[0]-contact_point[0]),
+                (int)(position[1]-contact_point[1]),(int)(position[2]-contact_point[2]));
+        }
+        if(!hit)continue;
+        unsigned threshold=u16(execution->status,0x3be + 12*region);
+        if(!threshold||threshold>20000)continue;
+        unsigned ordinal=execution->count++;
+        execution->regions|=1u<<region;
+        execution->order[ordinal]=region;
+        world.wilds_focus_break=1;
+        log_event("wilds_wound_break",world.actor,(u32)(uptr)execution->target,region,
+            world_focus_wound_damage(execution->status,ordinal));
+    }
+}
+
+static void world_sweep_focus_wounds(void *actor,void *manager,const void *attack)
+{
+    for(unsigned i=0;i<WOUND_MONSTERS;++i){
+        WWoundExecution *execution=wound_execution+i;
+        if(!execution->settled&&execution->eligible!=execution->regions&&
+           world_wound_execution_valid(execution,actor))
+            world_collect_focus_wounds(manager,attack,execution,WOUND_PARTS,0);
+    }
+}
+#endif
+
+/* Commit every wound from this thrust on the same closing frame. Each
+ * monster keeps one recovery action regardless of the number of wounds. */
+static void world_finish_focus_burst(void *actor,float frame)
+{
+#if ML_WILDS_MOVES
+    if(world.move!=W_FOCUS||!world.wilds_focus_break)return;
+    unsigned end=w_focus_finisher_end(world.source);
+    if(!end||frame<end)return;
+    unsigned count=0;
+    for(unsigned i=0;i<WOUND_MONSTERS;++i){
+        WWoundExecution *execution=wound_execution+i;
+        if(!execution->regions||execution->settled||!world_wound_execution_valid(execution,actor))continue;
+        WMonsterWounds *monster=wilds_wounds+i;
+        execution->settled=1;
+        for(unsigned ordinal=0;ordinal<execution->count;++ordinal){
+            unsigned region=execution->order[ordinal];
+            world_consume_wound(actor,monster,region,world_focus_wound_damage(execution->status,ordinal));
+            ++count;
+            if(hunter_style(actor)==5){
+                unsigned before=word(actor,0x2790);
+                world_add_valor_meter(actor,W_VALOR_WOUND_GAIN);
+                log_event("valor_wound_reward",(u32)(uptr)actor,before,word(actor,0x2790),W_VALOR_WOUND_GAIN);
+            }
+        }
+    }
+    if(count){
+        world.wilds_focus_wounds=count;
+        log_event("wilds_wound_settle",(u32)(uptr)actor,world.source,count,0);
+    }
+#endif
 }
 
 static void world_monster_wound_damage(void *manager,void *attack,void *target,void *point,
@@ -357,7 +452,16 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
             }
         }
     }
+    const void *previous_scale=world_wound_scaled_attack;
+    world_wound_scaled_attack=0;
+    if(threshold&&threshold<=20000&&world.move!=W_FOCUS){
+        WMonsterWounds *monster=wilds_wounds+slot;
+        if(monster->target==target&&monster->status==status&&monster->id==u16(status,0x1b6)&&
+           monster->parts[region].until>world_elapsed)
+            world_wound_scaled_attack=attack;
+    }
     world_original_monster_damage(manager,attack,target,point,v1,v2,part,shape);
+    world_wound_scaled_attack=previous_scale;
     if(!threshold||threshold>20000||word(target,0x1428)!=(u32)(uptr)status)return;
     unsigned after=u16(status,0x488+2*region);
     unsigned damage=(uint16_t)(after-before);
@@ -382,42 +486,40 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
     if(monster->target!=target||monster->status!=status||monster->id!=id)
         *monster=(WMonsterWounds){.target=target,.status=status,.id=id};
     WWound *w=monster->parts+region;
+#if ML_WILDS_MOVES
     unsigned focus=world.move==W_FOCUS&&world.source==905&&world_attack_owned&&
         world_attack_actor==world.actor&&u16(attack,0x34)==world_attack_id;
-    if(focus&&!world.wilds_focus_break&&w->until<=world_elapsed){
-        /* Adjacent GU hurt parts can win the same blade contact. Resolve
-         * only a nearby, currently posed wound on the monster actually hit. */
-        float best=90.f*90.f;
-        for(unsigned i=0;i<WOUND_PARTS;++i){
-            WWound *candidate=monster->parts+i;
-            float pos[3],d2=0;
-            if(candidate->until<=world_elapsed||!world_wound_position(target,candidate,pos))continue;
-            for(unsigned k=0;k<3;++k){float d=pos[k]-real(point,4*k);d2+=d*d;}
-            if(d2<best){
-                unsigned limit=u16(status,0x3be + 12*i);
-                if(!limit||limit>20000)continue;
-                best=d2;region=i;threshold=limit;w=candidate;
-            }
+    WWoundExecution *execution=wound_execution+slot;
+    if(focus){
+        if(execution->target!=target||execution->status!=status||execution->id!=id){
+            *execution=(WWoundExecution){
+                .target=target,.status=status,.actor=world.actor,.area=byte(target,AREA),.id=id,.slot=slot
+            };
+            for(unsigned i=0;i<WOUND_PARTS;++i)
+                if(monster->parts[i].until>world_elapsed)execution->eligible|=1u<<i;
         }
-    }
-    if(w->until>world_elapsed){
-        if(!focus||world.wilds_focus_break)return;
-        w->progress=0;w->until=0;w->recover=world_elapsed+12;w->flash=0;
-        world.wilds_focus_break=1;
-        unsigned bonus=25+threshold/4;if(bonus>120)bonus=120;
-        focus_burst.target=target;focus_burst.status=status;focus_burst.slot=slot;
-        focus_burst.actor=world.actor;focus_burst.area=byte(target,AREA);
-        focus_burst.id=id;focus_burst.region=region;focus_burst.bonus=bonus;
-        wound_execution=(__typeof__(wound_execution)){
-            .target=target,.status=status,.actor=world.actor,.area=byte(target,AREA),.slot=slot
-        };
 #if ML_WORLD_PRESENTATION
-        world_helm_impact(actor,(const float *)point);
+        unsigned previous=execution->regions;
 #endif
-#if ML_ASCENDANCE_PROTOTYPE
-        ascendance_hit(actor,0,target,1,0);
+        world_collect_focus_wounds(manager,attack,execution,region,point);
+#if ML_WORLD_PRESENTATION
+        if(!previous&&execution->regions)world_helm_impact(actor,(const float *)point);
 #endif
-        log_event("wilds_wound_break",world.actor,(u32)(uptr)target,region,bonus);
+    }
+    if(execution->target==target&&execution->status==status&&(execution->regions&(1u<<region)))return;
+    /* A thrust only reserves existing wounds. The subsequent cuts are
+     * ordinary damage on any unrelated part. */
+    if(world.move==W_FOCUS&&w->until>world_elapsed)return;
+#endif
+    if(w->until>world_elapsed){
+        /* An open wound starts a fresh damage budget based on this GU part. */
+        unsigned limit=threshold<36?36:threshold;
+        w->progress+=damage;
+        if(w->progress>=limit){
+            log_event("wilds_wound_damage_break",world.actor,(u32)(uptr)target,region,w->progress);
+            /* The hit already dealt its damage. This path only closes the wound. */
+            world_consume_wound(actor,monster,region,0);
+        }
         return;
     }
     if(w->until){w->until=0;w->progress=0;}
@@ -430,6 +532,7 @@ static void world_monster_wound_damage(void *manager,void *attack,void *target,v
         world_wound_anchor(w,target,part,(const float *)point);
         w->until=world_elapsed+90;
         log_event("wilds_wound_open",world.actor,(u32)(uptr)target,region,w->progress);
+        w->progress=0;
     }
 }
 
@@ -459,11 +562,12 @@ static unsigned wound_occluders(void *target,const void *table,WWoundOccluder *o
     return count;
 }
 
-static unsigned wound_hidden(WSurfaceVec point,WSurfaceVec view_dir,const WWoundOccluder *volumes,
+static float wound_occlusion(WSurfaceVec point,WSurfaceVec view_dir,const WWoundOccluder *volumes,
                              unsigned count,unsigned wound_row)
 {
     float view2=surface_dot(view_dir,view_dir);
-    if(!(view2>4.f))return 1;
+    if(!(view2>4.f))return 0;
+    float visibility=1.f;
     for(unsigned i=0;i<count;++i){
         const WWoundOccluder *v=volumes+i;
         if(v->row==wound_row)continue;
@@ -477,9 +581,12 @@ static unsigned wound_hidden(WSurfaceVec point,WSurfaceVec view_dir,const WWound
         float t=surface_dot(delta,view_dir)/view2;
         if(t<=.035f||t>=1)continue;
         WSurfaceVec separation=surface_add(delta,view_dir,-t);
-        if(surface_dot(separation,separation)<v->radius2)return 1;
+        float clearance=surface_dot(separation,separation)-v->radius2;
+        if(clearance<=0)return 0;
+        float fade=3.2f*clearance/v->radius2;
+        if(fade<visibility)visibility=fade;
     }
-    return 0;
+    return visibility;
 }
 
 static int world_screen_view(void *camera)
@@ -493,6 +600,37 @@ static int world_screen_view(void *camera)
        word(viewport,116)<=word(viewport,108))return -1;
     return (int)view;
 }
+
+static void wound_project(float *screen,WSurfaceVec point,unsigned view)
+{
+    _Alignas(16) float position[4]={point.x,point.y,point.z,1.f};
+    ((void (*)(float *,const float *,unsigned))(main_base+0x551340))(screen,position,view);
+}
+
+static unsigned wound_axis_component(float delta)
+{
+    /* Signed quarter pixels at the 640x360 reference size. */
+    float units=2.f*delta;
+    if(units>=127.f)return 127u;
+    if(units<=-127.f)return 129u;
+    return (unsigned)(int)(units+(units<0?-.5f:.5f))&255u;
+}
+
+static unsigned wound_project_axes(WSurfaceVec point,WSurfaceVec edge,WSurfaceVec normal,
+                                   const float *center,unsigned view)
+{
+    WSurfaceVec across=surface_cross(normal,edge);
+    float along_length=att_sqrt(surface_dot(edge,edge));
+    float across_length=att_sqrt(surface_dot(across,across));
+    if(!(along_length>.001f&&across_length>.001f))return 0;
+    _Alignas(16) float u[4],v[4];
+    wound_project(u,surface_add(point,edge,42.f/along_length),view);
+    wound_project(v,surface_add(point,across,17.f/across_length),view);
+    if(!(u[3]>0&&v[3]>0))return 0;
+    return wound_axis_component(u[0]-center[0])|(wound_axis_component(u[1]-center[1])<<8)|
+        (wound_axis_component(v[0]-center[0])<<16)|(wound_axis_component(v[1]-center[1])<<24);
+}
+
 static void world_wound_markers(void *a,void *camera)
 {
     unsigned aiming=(ml_pad_raw_bits()&PAD_FOCUS)&&(byte(a,DRAWN)&1);
@@ -502,16 +640,15 @@ static void world_wound_markers(void *a,void *camera)
     if(view<0)return;
     world_wound_owner(a);
     unsigned marker=0;
+#if ML_TRACE_EVENTS
+    static unsigned previous_style;
+    unsigned visible_style=0;
+#endif
     for(unsigned i=0;i<WOUND_MONSTERS&&marker<WOUND_MARKERS;++i){
         WMonsterWounds *m=wilds_wounds+i;
         if(!m->target||word(registry,0x1c+4*i)!=(u32)(uptr)m->target||
            word(m->target,0x1428)!=(u32)(uptr)m->status||u16(m->status,0x1b6)!=m->id||
            byte(m->target,AREA)!=byte(a,AREA))continue;
-        if(!aiming){
-            unsigned j=0;
-            while(j<WOUND_PARTS&&m->parts[j].flash<=world_elapsed)++j;
-            if(j==WOUND_PARTS)continue;
-        }
         const void *table=world_wound_part_table(m->target);
         const WSurfaceVec eye={real(camera,0x40),real(camera,0x44),real(camera,0x48)};
         WSurfaceModel model;
@@ -519,35 +656,54 @@ static void world_wound_markers(void *a,void *camera)
         unsigned loaded=0,volume_count=0,volumes_ready=0;
         for(unsigned j=0;j<WOUND_PARTS&&marker<WOUND_MARKERS;++j){
             WWound *w=m->parts+j;
-            unsigned kind=w->flash>world_elapsed?2:
-                aiming&&w->until>world_elapsed&&(int)word(m->status,0x370)>0?1:0;
-            if(!kind||!w->surface.model||!table||w->part_table!=table)continue;
+            unsigned broken=w->flash>world_elapsed;
+            unsigned open=w->until>world_elapsed&&(int)word(m->status,0x370)>0;
+            if((!broken&&!open)||!w->surface.model||!table||w->part_table!=table)continue;
             const void *part=(const void *)((uptr)table+44*w->part_index);
             if(((unsigned (*)(void *,unsigned))(*(uptr **)m->target)[0x370/4])(m->target,u16(part,12)))continue;
             if(!loaded){if(!surface_model(&model,m->target))break;loaded=1;}
-            WSurfaceVec point,normal;
-            if(!surface_sample(&model,m->target,&w->surface,&point,&normal))continue;
-            /* The strip winding gives the outward normal. Hide the dot
-             * on the far side without scanning the monster mesh each frame. */
+            WSurfaceVec point,normal,edge;
+            if(!surface_sample(&model,m->target,&w->surface,&point,&normal,&edge))continue;
+            /* The strip winding tells us which wounds face away from the camera. */
             WSurfaceVec view_dir=surface_sub(eye,point);
             float facing=surface_dot(normal,view_dir);
-            if(facing<=0||facing*facing<.1296f*surface_dot(normal,normal)*surface_dot(view_dir,view_dir))continue;
+            float metric=surface_dot(normal,normal)*surface_dot(view_dir,view_dir);
+            if(!(facing>0&&facing*facing>.04f*metric))continue;
+            float incidence=(facing/att_sqrt(metric)-.20f)*3.2f;
+            if(incidence>1.f)incidence=1.f;
             if(!volumes_ready){
                 volume_count=wound_occluders(m->target,table,volumes,sizeof(volumes)/sizeof(*volumes));
                 volumes_ready=1;
             }
-            if(wound_hidden(point,view_dir,volumes,volume_count,w->part_index))continue;
-            float screen[4];
-            ((void (*)(float *,const float *,unsigned))(main_base+0x551340))(screen,&point.x,view);
+            float visibility=incidence*wound_occlusion(point,view_dir,volumes,volume_count,w->part_index);
+            unsigned opacity=(unsigned)(7.f*visibility+.5f);
+            if(!opacity)continue;
+            /* The high bit distinguishes break flashes from posed wound decals. */
+            unsigned kind=broken?0x80u+(unsigned)(127.f*(1.f-(w->flash-world_elapsed)/wound_break_flash_time)+.5f):
+                (opacity<<4)|(((i*3u+j)&3u)<<2)|(1u+aiming);
+            _Alignas(16) float screen[4];
+            wound_project(screen,point,view);
             if(screen[3]>0&&screen[2]>0&&screen[0]>0&&screen[0]<1280&&screen[1]>0&&screen[1]<720){
                 unsigned sx=(unsigned)(screen[0]*(4094.0f/1280));
                 unsigned sy=(unsigned)((720-screen[1])*(4094.0f/720));
-                ml_wilds_wound(marker++,kind<<24|sy<<12|sx,kind==2?w->burst_damage:0);
-                if(kind==2&&!w->burst_shown){
+                unsigned detail=broken?w->burst_damage:wound_project_axes(point,edge,normal,screen,view);
+                if(!broken&&!detail)continue;
+                ml_wilds_wound(marker++,kind<<24|sy<<12|sx,detail);
+#if ML_TRACE_EVENTS
+                unsigned style=broken?3:kind&3;
+                if(!visible_style&&style!=previous_style)
+                    log_event("wilds_wound_visible",style,sx,sy,detail);
+                if(!visible_style)visible_style=style;
+#endif
+                if(broken&&!w->burst_shown){
                     w->burst_shown=1;log_event("wilds_wound_popup",w->burst_damage,sx,sy,j);
                 }
             }
         }
     }
     for(;marker<WOUND_MARKERS;++marker)ml_wilds_wound(marker,0,0);
+#if ML_TRACE_EVENTS
+    if(previous_style&&!visible_style)log_event("wilds_wound_visible",0,0,0,0);
+    previous_style=visible_style;
+#endif
 }

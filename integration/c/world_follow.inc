@@ -23,6 +23,24 @@ static void world_release_credit(void *target,const void *status,unsigned damage
 static unsigned crimson_final_strike;
 static void world_release_contact(void *target,void *part,const float *contact);
 static const void *world_wound_part_table(void *);
+#if ML_WILDS_MOVES
+static void world_add_valor_meter(void *a,unsigned amount)
+{
+    unsigned before=word(a,0x2790);
+    if(before>=1000)return;
+    unsigned after=before+amount;
+    /* Fixed rewards bypass native hit multipliers. Use GU's full-meter
+     * transition to enter blue and leave an existing blue timer in place. */
+    if(after>=1000){
+        if(valor_active(a))put(a,0x2790,1000);
+        else {
+            put(a,0x2790,999);
+            ((void (*)(void *,int))(main_base+0x2a33a8))(a,1);
+        }
+    }else put(a,0x2790,after);
+    set_real(a,0x27dc,60.f);
+}
+#endif
 
 #endif
 static unsigned world_helm_tier;
@@ -652,16 +670,7 @@ static u32 world_monster_query(void *manager,void *attack,void *target)
         if(helm&&!world_helm_valor_paid&&hunter_style(a)==5){
             world_helm_valor_paid=1;
             unsigned before=word(a,0x2790);
-            unsigned after=before+W_VALOR_HELM_GAIN;
-            /* Keep the fixed reward independent of native gain multipliers.
-             * Let GU set its full-meter flag and blue timer at the cap. */
-            if(after>=1000){
-                put(a,0x2790,999);
-                ((void (*)(void *,int))(main_base+0x2a33a8))(a,1);
-            }else{
-                put(a,0x2790,after);
-                set_real(a,0x27dc,60.f);
-            }
+            world_add_valor_meter(a,W_VALOR_HELM_GAIN);
             log_event("valor_helm_reward",(u32)(uptr)a,before,word(a,0x2790),W_VALOR_HELM_GAIN);
         }
 #endif

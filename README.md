@@ -10,7 +10,15 @@
 
 Android Recomp 可通过 Files 页导入安卓完整包。v0.271 已在荣耀 Magic8 Pro 上用 MHGU Relink 0.2.1（Forge 2.0.0）和 2808×1256 分辨率完成真机复测。 [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
 
-v0.326 的改动主要在 Windows Recomp 复测。安卓、Eden 与 Switch 兼容包已完成构建和附件校验。Switch 实体机曾报告进入集中模式、空挥居合或见切时闪退，当前实体机状态待复测。
+## v0.346 更新
+
+- 修复普通攻击打爆伤口时可能误触发怪物死亡、血条消失和任务提前结束的问题。普通破伤保留武器命中伤害、破伤奖励和特效，由 GU 原生伤害逻辑处理死亡。
+- 集中突刺命中同一怪物的多个伤口时，按命中顺序分别结算破伤伤害与奖励。独立破伤伤害按怪物最大体力的 0.6%、1.0%、1.4% 逐段计算，第四处起沿用第三档。这组系数是 GU 的移植标定。
+- 伤口保留红色中心，使用更深的裂纹和断续暖白边缘。集中模式下边缘更亮，破伤时有短促闪光。
+
+Windows Recomp 已在游戏内验证普通破伤、原生死亡结算、集中突刺破坏多个伤口和 R／ZR 互换。Android Recomp、Eden 和 Switch Atmosphère 已完成构建和压缩包校验。Switch 实体机曾报告进入集中模式、空挥居合或见切时闪退，v0.346 仍待实机复测。
+
+[正式版四平台下载](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.346) · [相杀硬直测试版](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.346-offset-test)
 
 ## v0.326 更新
 
