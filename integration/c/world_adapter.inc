@@ -1581,7 +1581,11 @@ static void world_commit(void *a,WDecision d)
         unsigned force_draw=d.move==W_CHIJIN||d.move==W_SLIDE;
 #if ML_ASCENDANCE_PROTOTYPE
         unsigned double_draw=d.kind==W_ENTER&&d.move==W_SMALL&&ascendance.double_cut&&double_draw_slot(d.slot);
+        unsigned flash_draw=d.kind==W_ENTER&&d.move==W_BIG&&d.slot==RADIANCE_FLASH_SLOT&&
+            ascendance.valor_flash&&!(byte(a,DRAWN)&1);
         immediate|=double_draw;
+        immediate|=flash_draw;
+        force_draw|=flash_draw;
         force_draw|=double_draw&&hunter_style(a)==5;
 #endif
 #endif
@@ -1638,7 +1642,8 @@ static void world_commit(void *a,WDecision d)
 #if ML_WILDS_MOVES
             if(force_draw&&!(byte(a,DRAWN)&1)){
                 ((void (*)(void *,unsigned))(main_base+0x2a2560))(a,1);
-                log_event(d.move==W_SLIDE?"wilds_slide_draw":d.move==W_CHIJIN?"wilds_red_draw":"valor_double_draw",
+                log_event(d.move==W_SLIDE?"wilds_slide_draw":d.move==W_CHIJIN?"wilds_red_draw":
+                    d.move==W_BIG?"valor_radiance_draw":"valor_double_draw",
                     (u32)(uptr)a,u16(a,STATE),u16(a,ACTION),byte(a,DRAWN));
             }
 #endif
@@ -2615,10 +2620,49 @@ static WDecision world_valor_sheathe_double(void *a,WObservation *o,unsigned raw
     return ascendance_valor_finish(o,0);
 }
 
+static unsigned world_valor_flash_ready(void *a)
+{
+    return ascendance_owner(a)&&ascendance.charge>=BOOST_COST&&
+        ascendance_flash_resource(a)&&ascendance_pursuit_resources(a);
+}
+
+static unsigned world_valor_flash_draw_ready(void *a,const MLObservation *b)
+{
+    if(world.move||ascendance.radiance||musou.phase||(byte(a,DRAWN)&1)||
+       (word(a,AIR)&0x400)||!valor_active(a))return 0;
+    unsigned state=u16(a,STATE);
+    return (world_radiance_source(a)==RADIANCE_SOURCE_FREE||w_uphill_run(state,b->native_action))&&
+        world_valor_flash_ready(a)&&world_ready(a);
+}
+
+static unsigned world_valor_flash_draw_press(void *a,const MLObservation *b,unsigned raw,unsigned edge)
+{
+    return (raw&PAD_BOOST)&&(edge&(PAD_BOOST|PAD_X|PAD_A))&&b->held==RADIANCE_INPUT&&
+        world_valor_flash_draw_ready(a,b);
+}
+
+enum { VALOR_FLASH_DRAW_SAMPLES=12 };
+static struct {
+    void *actor;
+    unsigned area,sample,state,action,flags;
+} valor_flash_draw;
+
+/* Give the second face button time to land before submitting a draw slash.
+ * On an incomplete chord, replay the original native request, if any. */
+static unsigned world_valor_flash_draw_wait(void *a,const MLObservation *b,unsigned raw,unsigned edge)
+{
+    unsigned partial=(raw&PAD_BOOST)&&(b->held==ML_X||b->held==ML_A);
+    if(!partial)return 0;
+    if(valor_flash_draw.actor==a&&valor_flash_draw.area==b->epoch)
+        return b->sample_sequence-valor_flash_draw.sample<VALOR_FLASH_DRAW_SAMPLES;
+    if(!(edge&(PAD_BOOST|PAD_X|PAD_A))||!world_valor_flash_draw_ready(a,b))return 0;
+    valor_flash_draw=(__typeof__(valor_flash_draw)){.actor=a,.area=b->epoch,.sample=b->sample_sequence};
+    return 1;
+}
+
 static WDecision world_valor_flash_begin(void *a,WObservation *o,unsigned raw,unsigned guard_ready)
 {
-    if(!o->valor||!ascendance_owner(a)||ascendance.charge<BOOST_COST||
-       !ascendance_flash_resource(a)||!ascendance_pursuit_resources(a))return (WDecision){0};
+    if(!o->valor||!world_valor_flash_ready(a))return (WDecision){0};
 
     WDecision d=w_valor_radiance_enter(&world,o,RADIANCE_FLASH_SLOT);
     if(d.kind!=W_ENTER)return d;
@@ -2757,9 +2801,15 @@ static WDecision world_valor_radiance(void *a,WObservation *o,unsigned raw,unsig
     if(ascendance.radiance==RADIANCE_FOLLOW)return ascendance_pursuit_cuts(a,o,edge);
     if(ascendance.radiance==RADIANCE_FLASH||ascendance.radiance==RADIANCE_CHASE)
         return ascendance_pursuit_command(a,o,raw,edge);
-    if(!o->valor||world.move||!o->alive||!o->drawn||!o->grounded||
+    if(!o->valor||world.move||!o->alive||!o->grounded||
        !o->resources_ready||ascendance.charge<BOOST_COST)
         return (WDecision){0};
+    if(!o->drawn){
+        if(!world_valor_flash_draw_press(a,&o->base,raw,edge))return (WDecision){0};
+        WObservation draw=*o;
+        draw.drawn=1; /* world_commit draws the weapon and binds the flash. */
+        return world_valor_flash_begin(a,&draw,raw,0);
+    }
     unsigned press=(edge&PAD_BOOST)&&!o->base.held;
     unsigned guard=valor_guard.actor==a&&valor_guard.epoch==o->base.epoch&&
         valor_guard.phase==VALOR_GUARD_REACTION&&valor_guard.confirmed;
@@ -2782,10 +2832,13 @@ static unsigned world_valor_radiance_contact_entry(void *a)
         if(world.move)return 0;
         ml_pad_read();
         unsigned raw=ascendance_pad_bits(a),edge=raw&~wilds_input_previous;
-        if(!(edge&PAD_BOOST)||world_radiance_source(a)!=RADIANCE_SOURCE_FREE)return 0;
         WObservation o={.base=observe(a,1),.state=u16(a,STATE),.drawn=byte(a,DRAWN)&1,
-            .alive=1,.grounded=!(word(a,AIR)&0x400),.resources_ready=world_ready(a),
+            .alive=1,.grounded=!(word(a,AIR)&0x400),
             .rank=3,.valor=1,.valor_style=1};
+        if(o.drawn){
+            if(!(edge&PAD_BOOST)||world_radiance_source(a)!=RADIANCE_SOURCE_FREE)return 0;
+        }else if(!world_valor_flash_draw_press(a,&o.base,raw,edge))return 0;
+        o.resources_ready=world_ready(a);
         WDecision d=world_valor_radiance(a,&o,raw,edge);
         if(d.kind!=W_ENTER)return 0;
         world_commit(a,d);w_input_finish(&world,&o,d);
@@ -2880,6 +2933,18 @@ static unsigned world_request(void *a,unsigned state,unsigned action,unsigned fl
         ml_pad_raw_bits();
 #endif
     unsigned edge=bits&~wilds_input_previous;
+#if ML_ASCENDANCE_PROTOTYPE
+    if((state==16&&(w_guild_attack(action)||action==41||(action>=87&&action<=144)))||
+       (state==1&&action==1)||((state==1||state==2)&&action>5&&action<=14)){
+        if(world_valor_flash_draw_press(a,&raw,bits,edge))return 1;
+        if(world_valor_flash_draw_wait(a,&raw,bits,edge)){
+            if(!valor_flash_draw.state){
+                valor_flash_draw.state=state;valor_flash_draw.action=action;valor_flash_draw.flags=flags;
+            }
+            return 1;
+        }
+    }
+#endif
     unsigned release_route=valor_release_input(a,&raw,0);
     unsigned native_third=w_valor_third_action(state,action)||w_valor_alternate_third_action(state,action);
     if(!world.move&&valor_active(a)&&valor_guard_pose(a)&&w_valor_second_action(state,action)){
@@ -3537,6 +3602,14 @@ static unsigned world_update(void *a,const MLObservation *b)
         focus_lead_time=focus_strike_time=0;focus_native.active=0;
     }
      wilds_input_previous=raw;
+#if ML_ASCENDANCE_PROTOTYPE
+    if(valor_flash_draw.actor&&(valor_flash_draw.actor!=a||valor_flash_draw.area!=b->epoch||
+       !world_valor_flash_draw_ready(a,b))){
+        valor_flash_draw.actor=0;
+        if(world_wilds_pending==W_CHIJIN)world_wilds_pending=0;
+    }
+    unsigned flash_draw_wait=world_valor_flash_draw_wait(a,b,raw,edge);
+#endif
     {
      unsigned state=u16(a,STATE),action=u16(a,ACTION),mv=0;
      unsigned native_art=world_native_art(a);
@@ -4120,7 +4193,11 @@ static unsigned world_update(void *a,const MLObservation *b)
         log_event("wilds_focus_chord",(u32)(uptr)a,raw,0,0);
     }
     /* 组合键起的五招（走他自己的 enter/commit，动画与物理都是他那套） */
-    if(world_wilds_pending){
+    if(world_wilds_pending
+#if ML_ASCENDANCE_PROTOTYPE
+       &&(!flash_draw_wait||world_wilds_pending!=W_CHIJIN)
+#endif
+    ){
         unsigned mv=world_wilds_pending;world_wilds_pending=0;
         WObservation request=o;
         if(mv==W_CHIJIN&&wilds_roll_input){
@@ -4141,6 +4218,16 @@ static unsigned world_update(void *a,const MLObservation *b)
             if(requested.kind!=W_KEEP)d=requested;
         }
     }
+#if ML_ASCENDANCE_PROTOTYPE
+    if(valor_flash_draw.actor==a&&!flash_draw_wait){
+        unsigned state=valor_flash_draw.state,action=valor_flash_draw.action,flags=valor_flash_draw.flags;
+        valor_flash_draw.actor=0;
+        if(d.kind==W_KEEP&&state){
+            ++submitting;virtual_request(a,state,action,flags);--submitting;
+            return 1;
+        }
+    }
+#endif
 #endif
 #if ML_DEBUG_FORCE
     /* 调试台：ZL + Y 依次强制起招（他的六招 + 我们的五招），用来验证"我们能不能从代码里驱动他的状态机"。 */

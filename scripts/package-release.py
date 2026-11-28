@@ -60,6 +60,7 @@ def patch_guide(version, platform, prefix):
 • 方向＋ZR＋X＋A 可拔刀出移动气刃斩。公会 ZR＋A 见切，ZR＋B 特殊纳刀。
 • 勇气刚一 GP 成功后，逐次按 ZR 接刚二和练气解放斩。未成功时，先用 ZR 接刚三，再按 ZR 接练气解放斩。
 • 公会轻按 R 后松开切换增幅，R＋X＋A 进光辉纳刀。
+• 勇气蓝刃收刀时按 R＋X＋A 直接拔刀出光辉闪斩，需要一格增幅护腕储备。
 • Xbox 键名 R＝RB、ZR＝RT。集中模式仍用 ZL，操作类型 0 的狩技仍用方向键。
 '''.encode('utf-8-sig')
 

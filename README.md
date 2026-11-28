@@ -10,6 +10,13 @@
 
 Android Recomp 可通过 Files 页导入安卓完整包。v0.271 已在荣耀 Magic8 Pro 上用 MHGU Relink 0.2.1（Forge 2.0.0）和 2808×1256 分辨率完成真机复测。 [安卓 Recomp 安装说明](安卓Recomp安装说明.txt)
 
+## v0.347 更新
+
+- 修复角色被击飞时增幅护腕 UI 消失的问题。
+- 勇气蓝刃收刀时，按 ZR＋X＋A（Xbox 手柄 RT＋Y＋B）直接拔刀出光辉闪斩。消耗一格增幅护腕储备，从起手当帧即可相杀。R／ZR 互换补丁下改按 R＋X＋A（Xbox 手柄 RB＋Y＋B）。
+
+[v0.347 四平台正式版](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.347) · [相杀硬直测试版](https://github.com/zeta233/MHGU-Wilds-Long-Sword/releases/tag/v0.347-offset-test)
+
 ## v0.346 更新
 
 - 修复普通攻击打爆伤口时可能误触发怪物死亡、血条消失和任务提前结束的问题。普通破伤保留武器命中伤害、破伤奖励和特效，由 GU 原生伤害逻辑处理死亡。

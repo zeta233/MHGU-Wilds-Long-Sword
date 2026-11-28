@@ -158,11 +158,19 @@ static void ascendance_rebind(void *a,unsigned quest,unsigned area,unsigned samp
 
 static void ascendance_quest_poll(void)
 {
-    /* Town input still updates when the quest hunter no longer does. */
-    if((ascendance.actor||radiance_offset_quest)&&ascendance_in_town()){
+    /* Input polling outlives the hunter's combat update. Clear the retained
+     * HUD on a quest exit, faint, or area load even without a weapon tick. */
+    if(!(ascendance.actor||radiance_offset_quest))return;
+    if(ascendance_in_town()){
         ascendance_offset_quest(0);
         if(ascendance.actor)ascendance_rebind(0,0,0,0,0);
         ml_ascendance_gauge(0);
+    }else if(ascendance.actor){
+        void *hunter=world_local_hunter();
+        unsigned quest=ascendance_quest_data();
+        if(hunter!=ascendance.actor||!quest||quest!=ascendance.quest||
+           (int16_t)u16(hunter,HP)<=0||byte(hunter,AREA)!=ascendance.area)
+            ml_ascendance_gauge(0);
     }
 }
 
@@ -2574,7 +2582,8 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
         return;
     }
     unsigned owned=ascendance.actor==a;
-    if(!quest||!o->resources_ready||!area)area=255;
+    if(!quest||!area||(!o->resources_ready&&
+       !(owned&&quest==ascendance.quest&&area==ascendance.area)))area=255;
     if(!quest&&owned)quest=ascendance.quest;
     /* Loading and camp suspend the meter. A new combat area only resets move
      * state and target references, while the same quest keeps its progress. */
@@ -2626,7 +2635,7 @@ static void ascendance_tick(void *a,const WObservation *o,unsigned raw,unsigned 
         !ascendance.radiance&&world_bound&&world_bound_actor==(u32)(uptr)a&&
         o->state==16&&b->native_action==w_action(W_SHEATHE)&&
         b->motion==0x500+RADIANCE_HOLD_SLOT&&o->alive&&o->drawn;
-    unsigned toggle_available=o->grounded&&!b->held&&(!o->valor_style||(o->valor&&!o->drawn))&&
+    unsigned toggle_available=o->resources_ready&&o->grounded&&!b->held&&(!o->valor_style||(o->valor&&!o->drawn))&&
         (idle||(ordinary_sheathe&&ascendance.remaining<=0));
 #if ML_SWAP_R_ZR
     /* A physical R hold used for sheathed movement must not ignite or end
