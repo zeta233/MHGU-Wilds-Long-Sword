@@ -60,16 +60,16 @@ static void valor_routes(void)
  gp.base.animation_frame=38;
  assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_THIRD).kind==W_KEEP);
  WDecision release=w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_SECOND);
- assert(release.move==W_RELEASE&&release.rank_delta==0&&guard.valor_release);
+ assert(release.move==W_RELEASE&&release.rank_delta==0&&guard.drawn_release);
  gp.base.motion=0x500+guard.slot;gp.base.native_action=w_action(W_RELEASE);
- assert(tick(&guard,&gp,0,W_VALOR_RELEASE_END-1).kind==W_KEEP);
- assert(tick(&guard,&gp,0,W_VALOR_RELEASE_END).kind==W_IDLE&&!guard.valor_release);
+ assert(tick(&guard,&gp,0,W_DRAWN_RELEASE_END-1).kind==W_KEEP);
+ assert(tick(&guard,&gp,0,W_DRAWN_RELEASE_END).kind==W_IDLE&&!guard.drawn_release);
  gp.base.native_action=117;gp.base.motion=0x5ba;gp.base.animation_frame=109;
  assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_THIRD).kind==W_KEEP);
  gp.base.animation_frame=110;
  assert(w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_SECOND).kind==W_KEEP);
  release=w_valor_chain_release(&guard,&gp,W_VALOR_RELEASE_THIRD);
- assert(release.move==W_RELEASE&&release.rank_delta==0&&guard.valor_release);
+ assert(release.move==W_RELEASE&&release.rank_delta==0&&guard.drawn_release);
  /* Each independently cancellable imported strike accepts the partner button
   * in either order. The wound-confirm and airborne phases advance separately. */
  const unsigned strikes[][2]={
@@ -466,11 +466,11 @@ static void valor_guard_recovery_routes(void)
  for(unsigned i=0;i<sizeof(seconds)/sizeof(*seconds);i++){
   WObservation o=obs();WState s={0};o.valor_style=o.valor=1;
   o.base.native_action=seconds[i];o.base.motion=0x5b9;o.base.animation_frame=99;
-  assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_SECOND).move==W_RELEASE&&s.valor_release);
+  assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_SECOND).move==W_RELEASE&&s.drawn_release);
  }
  WObservation o=obs();WState s={0};o.valor_style=o.valor=1;o.state=1;
  assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_SECOND).kind==W_KEEP);
- assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_TAIL).move==W_RELEASE&&s.valor_release);
+ assert(w_valor_chain_release(&s,&o,W_VALOR_RELEASE_TAIL).move==W_RELEASE&&s.drawn_release);
 }
 static void short_spirit_costs(void)
 {
@@ -498,6 +498,38 @@ static void short_spirit_costs(void)
 }
 int main(void){
  valor_routes();
+ WObservation adept=obs();
+ WState adept_state={0};
+ adept.adept_style=1;
+ adept.rank=0;
+ assert(w_adept_chain_release(&adept_state,&adept).kind==W_KEEP);
+ adept.rank=3;
+ assert(w_debug_enter(&adept_state,&adept,W_FORESIGHT).kind==W_KEEP);
+ WDecision adept_release=w_adept_chain_release(&adept_state,&adept);
+ assert(adept_release.kind==W_ENTER&&adept_release.move==W_RELEASE&&
+        adept_release.rank_delta==-1&&adept_state.drawn_release);
+ adept.base.held=ML_R;
+ adept.base.motion=0x500+adept_state.slot;
+ adept.base.native_action=w_action(W_RELEASE);
+ assert(tick(&adept_state,&adept,ML_R,W_DRAWN_RELEASE_END).kind==W_IDLE);
+ assert(w_wilds_round(&adept_state,&adept).kind==W_KEEP);
+ assert(w_wilds_round_charge(&adept_state,&adept).kind==W_KEEP);
+ assert(w_debug_enter(&adept_state,&adept,W_BIG).kind==W_ENTER);
+ adept_state.counter_success=1;
+ adept_state.iai_follow_keys=ML_R;
+ adept_state.iai_follow_wait=0;
+ adept.base.held=0;
+ adept.base.animation_frame=37;
+ WDecision adept_follow=wilds_iai_follow(&adept_state,&adept);
+ assert(adept_follow.kind==W_NATIVE&&adept_follow.native_action==W_ADEPT_FOLLOW_ACTION);
+ assert(w_adept_native_cancel(16,W_ADEPT_COUNTER_ACTION,0x500+185)==90);
+ assert(w_adept_native_cancel(16,W_ADEPT_RECKONING_ACTION,0x500+186)==180);
+ assert(w_adept_native_cancel(16,W_ADEPT_COUNTER_ACTION,0x500+186)==0);
+ assert(w_adept_chain_release(&adept_state,&adept).move==W_RELEASE);
+ assert(w_adept_recovery_follow(&adept_state,&adept,ML_R|ML_B,0).move==W_SHEATHE);
+ w_leave(&adept_state);
+ assert(w_debug_enter(&adept_state,&adept,W_THRUST).kind==W_ENTER);
+ assert(w_adept_recovery_follow(&adept_state,&adept,ML_B,0).kind==W_ROLL);
  red_x_recovery();
  directional_spirit();
  draw_and_floor_routes();

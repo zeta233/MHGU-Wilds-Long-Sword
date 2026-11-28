@@ -145,6 +145,7 @@ static WDecision wilds_spirit_follow(WState *s,const WObservation *o)
 }
 static WDecision wilds_charge(WState *s,const WObservation *o,unsigned stage)
 {
+    if(stage==4&&o->adept_style)return (WDecision){0};
     unsigned inherit=(s->move&&s->source==s->wilds_charge_carry_source)||
         (!s->move&&s->wilds_charge_carry_action&&o->state==16&&
          o->base.native_action==s->wilds_charge_carry_action)||
@@ -198,6 +199,7 @@ static WDecision wilds_charge_recover(WState *s,const WObservation *o)
 }
 static WDecision wilds_round(WState *s,const WObservation *o,unsigned cost)
 {
+    if(o->adept_style)return (WDecision){0};
     WDecision d=w_wilds_enter(s,o,W_CHARGE);if(d.kind!=W_ENTER)return d;
     if(o->rank!=3)d.gauge_delta=-(int)cost;
     s->wilds_tier=4;s->wilds_stage=4;s->source=917;s->slot=w_clip(917)->slot;
@@ -206,6 +208,8 @@ static WDecision wilds_round(WState *s,const WObservation *o,unsigned cost)
 WDecision w_wilds_round(WState *s,const WObservation *o)
 {
     if(!spirit_available(o,25))return (WDecision){0};
+    /* A plain Roundslash after native Spirit III earns native Alchemy gauge. */
+    if(o->alchemy_style&&!s->move)return wilds_native(s,o,30);
     return wilds_round(s,o,25);
 }
 #if ML_ASCENDANCE_PROTOTYPE
@@ -702,7 +706,7 @@ static WDecision wilds_step(WState *s,const WObservation *o)
     }
     /* Buffer the final twelve recovery frames so an early evade tap is not
      * swallowed by the native request filter while our action owns the slot. */
-    unsigned release_sheathe=s->move==W_RELEASE&&!s->valor_release;
+    unsigned release_sheathe=s->move==W_RELEASE&&!s->drawn_release;
     if((pressed&ML_B)&&!(b->held&ML_ZR)&&frame+12>=clip->cancel){
         s->wilds_roll_buffer=release_sheathe?.5f:.25f;s->wilds_roll_mod=b->held&ML_R;
         s->wilds_roll_heading=b->magnitude>=50?b->input_heading:b->heading;
@@ -826,7 +830,7 @@ static WDecision wilds_step(WState *s,const WObservation *o)
             return w_wilds_enter(s,&next,W_CHIJIN);
         }
     }
-    if(s->valor_release&&frame>=W_VALOR_RELEASE_END)
+    if(s->drawn_release&&frame>=W_DRAWN_RELEASE_END)
         return wilds_charge_recover(s,o);
     if(frame>=clip->cancel){
         if((pressed&(ML_X|ML_A))&&(b->held&(ML_X|ML_A|ML_R|ML_ZR))==(ML_X|ML_A)){

@@ -85,7 +85,7 @@ fn main(){
     } else {
         error!("[ml-rebuild] R/ZR swap unavailable; using default controls");
     }
-    info!("[ml-rebuild] installed; Guild only; R/ZR separate; native collision retained");
+    info!("[ml-rebuild] installed; all six hunting styles; native collision retained");
 }
 
 #[cfg(ml_world_combat)]

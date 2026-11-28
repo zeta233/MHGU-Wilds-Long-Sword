@@ -163,6 +163,7 @@ static WDecision valor_foresight_follow(WState *s,const WObservation *o,const WE
  * released tap on its source action until that action permits the cancel. */
 WDecision w_foresight_press(WState *s,const WObservation *o)
 {
+    if(o->adept_style)return (WDecision){0};
     const MLObservation *b=&o->base;
     const unsigned chord=ML_R|ML_A;
     if(s->foresight_press.motion&&s->foresight_press.valor!=o->valor){
@@ -272,7 +273,9 @@ static WDecision wilds_iai_follow(WState *s,const WObservation *o)
         d.counter_resheathe=d.kind==W_ENTER&&!o->valor_style;
         return d;
     }
-    if(frame>=70&&b->held==ML_R){
+    if(o->adept_style&&s->iai_follow_keys==ML_R&&s->iai_follow_wait<=0)
+        return wilds_native(s,&next,W_ADEPT_FOLLOW_ACTION);
+    if(!o->adept_style&&frame>=70&&b->held==ML_R){
         s->wilds_charge_link=3;
         float threshold=w_charge_gesture_time(s);
         if(s->wilds_bridge_hold+1.e-5f>=threshold)return wilds_charge(s,&next,3);
@@ -464,6 +467,7 @@ static WDecision world_command_step(WState *s,const WObservation *o,unsigned sou
     if(iai.kind!=W_KEEP)return iai;
     uint32_t permission[8];world_input_permission(source,event,permission);
     if(o->valor_style)permission[WI_SHEATHE.word]&=~(3u<<WI_SHEATHE.shift);
+    if(o->adept_style)permission[WI_FORESIGHT.word]&=~(3u<<WI_FORESIGHT.shift);
     const float direction[4]={(float)b->input_heading,0,0,0};
     int delta=ml_heading_delta(b->input_heading,b->heading);
     /* Recorded GU input: positive quarter-turn is the hunter's left.

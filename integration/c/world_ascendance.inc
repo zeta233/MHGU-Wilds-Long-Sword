@@ -176,8 +176,7 @@ static void ascendance_quest_poll(void)
 
 static unsigned ascendance_style(void *a)
 {
-    unsigned style=hunter_style(a);
-    return style==0||style==5;
+    return guild_rules(a)||hunter_style(a)==STYLE_VALOR;
 }
 
 static unsigned ascendance_owner(void *a)
@@ -191,7 +190,7 @@ static float ascendance_bonus_rate(unsigned style,unsigned source)
     if(source==906||source==907)return 1.2f;
     if(source==109||source==917||source==W_CRIMSON_SPIN)return 1.1f;
     if(style==5&&(source==W_CRIMSON_MOVING||source==W_CRIMSON_STATIONARY||source==W_CRIMSON_RETREAT||
-                  (source==904&&world.valor_release)))return 1.1f;
+                  (source==904&&world.drawn_release)))return 1.1f;
     return 1.f;
 }
 
@@ -403,8 +402,8 @@ static float ascendance_attack_scale(void *attack)
 static void ascendance_transition(void *a,const WDecision *d)
 {
     if(!ascendance_owner(a))return;
-    if(d->kind==W_ENTER&&d->move==W_THRUST&&hunter_style(a)==0)ascendance.helm_power=ascendance.remaining>0?170:120;
-    if(d->kind==W_ENTER&&d->move==W_RELEASE&&hunter_style(a)==0){
+    if(d->kind==W_ENTER&&d->move==W_THRUST&&guild_rules(a))ascendance.helm_power=ascendance.remaining>0?170:120;
+    if(d->kind==W_ENTER&&d->move==W_RELEASE&&guild_rules(a)){
         ascendance.release_power=ascendance.remaining>0?170:120;
         log_event("ascendance_author_release",(u32)(uptr)a,ascendance.release_power,(u32)ascendance.remaining,0);
     }
@@ -503,7 +502,7 @@ static void ascendance_sheathe_pose_tick(void *a,const WObservation *o)
 static unsigned ascendance_radiance_ready(void *a)
 {
     return ascendance_owner(a)&&!ascendance.radiance&&
-        !musou.phase&&!ascendance.double_cut&&hunter_style(a)==0&&
+        !musou.phase&&!ascendance.double_cut&&guild_rules(a)&&
         ascendance.charge>=BOOST_COST&&
         !(word(a,AIR)&0x400)&&(int16_t)u16(a,HP)>0;
 }

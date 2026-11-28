@@ -33,7 +33,17 @@ static inline unsigned w_focus_finisher_end(unsigned source)
 enum { W_CRIMSON_DIRECTIONAL=1,W_CRIMSON_LATERAL };
 enum { W_KEEP,W_ENTER,W_NATIVE,W_IDLE,W_ROLL,W_ABORT,W_NATIVE_R,W_MOTION,W_VALOR_SHEATHE };
 enum { W_RED_ROUND=1,W_RED_IAI=2 };
-enum { W_VALOR_COUNTER_GAIN=200,W_VALOR_WOUND_GAIN=250,W_VALOR_HELM_GAIN=300,W_VALOR_RELEASE_END=106 };
+enum { W_VALOR_COUNTER_GAIN=200,W_VALOR_WOUND_GAIN=250,W_VALOR_HELM_GAIN=300,W_DRAWN_RELEASE_END=106 };
+enum { W_ADEPT_FOLLOW_ACTION=66,W_ADEPT_COUNTER_ACTION=85,W_ADEPT_RECKONING_ACTION=67,
+       W_ADEPT_RECKONING_COST=25,W_ADEPT_RELEASE_CANCEL=W_DRAWN_RELEASE_END-6 };
+static inline unsigned w_adept_native_cancel(unsigned state,unsigned action,unsigned motion)
+{
+    if(state!=16)return 0;
+    /* Native LMT command windows begin at these frames. */
+    if(action==W_ADEPT_COUNTER_ACTION&&motion==0x500+185)return 90;
+    if(action==W_ADEPT_RECKONING_ACTION&&motion==0x500+186)return 180;
+    return 0;
+}
 enum { W_RELEASE_SEAT_START=118,W_RELEASE_SEAT_ALIGN=132,W_RELEASE_SHEATHE_FRAME=140,W_RELEASE_RECOVERY_CANCEL=205 };
 /* The roundslash archive removes 48 frames from the original GU timeline. */
 enum { W_ROUND_TAIL_FRAME=62,W_ROUND_CUT_FRAMES=48,W_ROUND_SHEATHE_FRAME=80,W_ROUND_FRAMES=111 };
@@ -46,12 +56,13 @@ typedef struct {
     MLObservation base;
     unsigned state,drawn,alive,grounded,rank,contact,counter,resources_ready;
     unsigned previous_weapon_action;
-    unsigned focus_strike,valor,valor_style,valor_move,valor_draw_cancel;
-    unsigned focus_camera_heading,has_focus_heading,focus_active;
+    unsigned focus_strike,valor,valor_style,adept_style,valor_move,valor_draw_cancel;
+    unsigned focus_camera_heading,has_focus_heading,focus_active,alchemy_style;
     unsigned ascendance_active,dividing_stick_heading,rising_sprint;
 } WObservation;
 typedef struct {
     unsigned kind,move,source,slot,native_action,heading;
+    unsigned aerial_landing;
     int rank_delta,gauge_delta;
     unsigned gauge_clear,gauge_fill,regen_seconds;
     unsigned valor_gain,valor_foresight_second,valor_flash_second_press;
@@ -77,7 +88,7 @@ typedef struct {
     } round_follow;
     unsigned queued_word,queued_shift,queued_heading;
     unsigned counter_success,hit_success,rank_paid,follow_ready;
-    unsigned helm_cost_pending,valor_release;
+    unsigned helm_cost_pending,drawn_release;
     unsigned ground_node,main_source,spirit_paid;
     unsigned wilds_tier,wilds_sample,wilds_previous;
     float wilds_elapsed,wilds_buffer,wilds_roll_buffer,wilds_thrust_buffer;
@@ -248,7 +259,9 @@ void w_reset(WState *s);
 WDecision w_wilds_enter(WState *s,const WObservation *o,unsigned move);
 WDecision w_art_follow(WState *s,const WObservation *o,unsigned keys);
 WDecision w_valor_chain_release(WState *s,const WObservation *o,unsigned from);
+WDecision w_adept_chain_release(WState *s,const WObservation *o);
 WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsigned charge);
+WDecision w_adept_recovery_follow(WState *s,const WObservation *o,unsigned keys,unsigned charge);
 WDecision w_iai_press(WState *s,const WObservation *o);
 WDecision w_iai_attack(WState *s,const WObservation *o,unsigned key);
 unsigned w_iai_ready(const WState *s,const WObservation *o);

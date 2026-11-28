@@ -149,7 +149,7 @@ unsigned w_guild_source(unsigned state,unsigned action,unsigned motion)
     }
     if(action==22&&(slot==105||slot==112))return 112;
     if(slot>=101&&slot<=108)return slot;
-    
+
     if(slot>=127&&slot<=131)return w_source(motion);
     return 0;
 }
@@ -359,7 +359,7 @@ WDecision w_leave(WState *s)
     if(s->move==W_BIG&&!s->rank_paid&&!s->counter_success&&s->rank)d.rank_delta=-1;
 #endif
     if(s->helm_cost_pending&&s->rank)d.rank_delta-=1;
-    s->helm_cost_pending=0;s->valor_release=0;s->red_foresight_chain=0;s->wilds_charge_link=0;
+    s->helm_cost_pending=0;s->drawn_release=0;s->red_foresight_chain=0;s->wilds_charge_link=0;
     s->valor_foresight_r=s->foresight_focus=0;
     s->wilds_three_exit_r=s->wilds_three_exit_sample=0;
     s->wilds_native_three_sample=0;
@@ -409,6 +409,7 @@ static void big_counter_rank_reward(const WObservation *o,WDecision *d)
 
 static WDecision enter_move(WState *s,const WObservation *o,unsigned move,unsigned mask,unsigned valor_radiance)
 {
+    if(o->adept_style&&move==W_FORESIGHT)return (WDecision){0};
     if((o->valor_style||o->valor)&&!valor_radiance&&(move==W_SHEATHE||move==W_SMALL||move==W_BIG))
         return (WDecision){0};
     /* Source down::exit bypasses settlement only for land (action0x5c).
@@ -628,7 +629,18 @@ WDecision w_valor_chain_release(WState *s,const WObservation *o,unsigned from)
         if((o->state!=1&&o->state!=2)||b->native_action>5)return (WDecision){0};
     }else return (WDecision){0};
     WDecision d=enter(s,o,W_RELEASE,ML_R);
-    s->valor_release=1;
+    s->drawn_release=1;
+    d.motion_contract=1;d.blend=8;d.speed=1;
+    return d;
+}
+
+WDecision w_adept_chain_release(WState *s,const WObservation *o)
+{
+    if(s->move||!o->adept_style||!o->alive||!o->grounded||!o->drawn||
+       !o->resources_ready||!o->rank)return (WDecision){0};
+    WDecision d=enter(s,o,W_RELEASE,ML_R);
+    s->drawn_release=1;
+    d.rank_delta--;
     d.motion_contract=1;d.blend=8;d.speed=1;
     return d;
 }
@@ -682,6 +694,7 @@ static WDecision ground_enter(WState *s,const WObservation *o,unsigned node,unsi
     }
     unsigned special=node==28?W_FORESIGHT:node==45?W_THRUST:node==61?W_SHEATHE:
         node==64?W_SMALL:node==65?W_BIG:0;
+    if(node==5&&o->adept_style)return (WDecision){0};
     if(special){
         WDecision d=enter(s,o,special,mask);
         if(d.kind==W_ENTER&&prep){
@@ -744,6 +757,27 @@ WDecision w_art_spirit(WState *s,const WObservation *o,unsigned moving_two,unsig
         return wilds_directional_weak_spirit(s,o);
     }
     return wilds_native(s,o,spirit_available(o,15)?16:17);
+}
+
+WDecision w_adept_recovery_follow(WState *s,const WObservation *o,unsigned keys,unsigned charge)
+{
+    unsigned thrust_roll=s->move==W_THRUST&&keys==ML_B;
+    if(!o->adept_style||!o->alive||!o->drawn||!o->grounded||!o->resources_ready||
+       (s->move&&!thrust_roll&&(s->move!=W_RELEASE||!s->drawn_release)))return (WDecision){0};
+    switch(keys){
+    case ML_X:
+        return o->rank==3?w_wilds_enter(s,o,W_CHIJIN):wilds_native(s,o,0);
+    case ML_A:return wilds_native(s,o,4);
+    case ML_B:return wilds_finish(s,W_ROLL,o->base.magnitude>=50?o->base.input_heading:o->base.heading);
+    case ML_R:
+        if(charge)return wilds_charge(s,o,1);
+        if(o->base.magnitude>=50&&spirit_available(o,10))return w_wilds_enter(s,o,W_SLIDE);
+        return wilds_native(s,o,spirit_available(o,15)?16:17);
+    case ML_R|ML_X:return enter(s,o,W_THRUST,keys);
+    case ML_R|ML_B:return enter(s,o,W_SHEATHE,keys);
+    case ML_R|ML_Y:return w_wilds_enter(s,o,W_FOCUS);
+    default:return (WDecision){0};
+    }
 }
 #endif
 #endif

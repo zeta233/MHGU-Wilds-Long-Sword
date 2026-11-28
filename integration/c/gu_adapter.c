@@ -157,6 +157,7 @@ static void ml_pad_read(void)
 }
 #if ML_WORLD_COMBAT && ML_WILDS_MOVES
 static void world_art_poll(void);
+static void world_aerial_pad_poll(void);
 #endif
 #if ML_WORLD_COMBAT && ML_ASCENDANCE_PROTOTYPE
 static void ascendance_quest_poll(void);
@@ -174,6 +175,7 @@ void ml_pad_refresh(void)
 #endif
 #if ML_WORLD_COMBAT && ML_WILDS_MOVES
     world_art_poll();
+    world_aerial_pad_poll();
 #endif
 #if ML_WORLD_COMBAT && ML_ASCENDANCE_PROTOTYPE
     ascendance_quest_poll();
@@ -191,6 +193,15 @@ static unsigned hunter_style(void *a)
 {
     return ((unsigned (*)(void *))(main_base+0x268818))(a);
 }
+enum { STYLE_GUILD=0,STYLE_STRIKER=1,STYLE_AERIAL=2,STYLE_ADEPT=3,STYLE_ALCHEMY=4,STYLE_VALOR=5 };
+static unsigned aerial_style(void *a){return hunter_style(a)==STYLE_AERIAL;}
+static unsigned adept_style(void *a){return hunter_style(a)==STYLE_ADEPT;}
+static unsigned alchemy_style(void *a){return hunter_style(a)==STYLE_ALCHEMY;}
+static unsigned guild_rules(void *a)
+{
+    unsigned style=hunter_style(a);
+    return style==STYLE_GUILD||style==STYLE_STRIKER||style==STYLE_ADEPT||style==STYLE_ALCHEMY;
+}
 static unsigned valor_active(void *a)
 {
     return hunter_style(a)==5&&(word(a,10056)&0x400000u);
@@ -203,7 +214,9 @@ static unsigned local_supported(void *a)
     return 1;
 #else
     unsigned style=hunter_style(a);
-    return style==0 || (ML_WILDS_MOVES && style==5);
+    return style==STYLE_GUILD ||
+        (ML_WILDS_MOVES&&(style==STYLE_STRIKER||style==STYLE_AERIAL||style==STYLE_ADEPT||
+                          style==STYLE_ALCHEMY||style==STYLE_VALOR));
 #endif
 }
 #if ML_SWAP_R_ZR
@@ -232,7 +245,7 @@ static unsigned quest_input(void *a)
 #if ML_ASCENDANCE_PROTOTYPE
 static unsigned solo_ascendance_rt(void *a)
 {
-    if(!local_supported(a)||hunter_style(a)!=0||!byte(a,AREA)||byte(a,AREA)==255)return 0;
+    if(!local_supported(a)||!guild_rules(a)||!byte(a,AREA)||byte(a,AREA)==255)return 0;
     const void *quest=(const void *)(uptr)word((const void *)main_base,0x188ad90);
     const void *players=(const void *)(uptr)word((const void *)main_base,0x1885b58);
     if(!quest||!word(quest,0xa4)||!players)return 0;
@@ -1038,7 +1051,7 @@ static unsigned valor_release_grip_return(void *a,void *blade,unsigned motion,un
                                            float *pose,u32 *joint,u32 *closed)
 {
     float frame=real(a,FRAME);
-    if(motion==0x500+250&&frame>=W_VALOR_RELEASE_END-5&&frame<W_VALOR_RELEASE_END+2&&
+    if(motion==0x500+250&&frame>=W_DRAWN_RELEASE_END-5&&frame<W_DRAWN_RELEASE_END+2&&
        posed&&*joint==12&&!*closed){
         valor_release_grip.actor=a;valor_release_grip.blade=blade;
         valor_release_grip.area=byte(a,AREA);valor_release_grip.motion=motion;
@@ -1569,6 +1582,7 @@ static u32 request_hook(void *a,u32 state,u32 action,u32 flags)
     if(world_request(a,state,action,flags))return 0;
 #if ML_WORLD_INPUT_VM
 #if ML_WILDS_MOVES
+    if(aerial_style(a)&&!world.move)return original_request(a,state,action,flags);
     if(world_focus_native_input(a,state,action,flags))return 0;
     unsigned aim;
     if(state==16&&w_guild_attack(action)&&(byte(a,DRAWN)&1)&&!(word(a,AIR)&0x400)&&
